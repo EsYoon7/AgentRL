@@ -7,11 +7,12 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/thudm/agentrl/controller/internal/pb"
 	"github.com/thudm/agentrl/controller/internal/utils"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 type Controller struct {
-	Logger             echo.Logger
+	Logger             *zap.SugaredLogger
 	Transport          *http.Transport
 	TaskManager        *TaskManager
 	SessionManager     *SessionManager
@@ -24,9 +25,16 @@ type Controller struct {
 	InteractionTimeout time.Duration
 }
 
-func Setup(e *echo.Echo, grpc *grpc.Server, longTimeout bool) {
+type Options struct {
+	Logger      *zap.SugaredLogger
+	EchoServer  *echo.Echo
+	GrpcServer  *grpc.Server
+	LongTimeout bool
+}
+
+func Setup(op *Options) {
 	controller := &Controller{
-		Logger:             e.Logger,
+		Logger:             op.Logger,
 		Transport:          utils.NewTransport(),
 		SessionExpireTime:  5 * time.Minute,
 		SessionRemoveTime:  10 * time.Minute,
@@ -37,7 +45,7 @@ func Setup(e *echo.Echo, grpc *grpc.Server, longTimeout bool) {
 		InteractionTimeout: 4 * time.Minute,
 	}
 
-	if longTimeout {
+	if op.LongTimeout {
 		controller.SessionExpireTime = 11 * time.Minute
 		controller.SessionRemoveTime = 20 * time.Minute
 		controller.InteractionTimeout = 10 * time.Minute
@@ -46,22 +54,22 @@ func Setup(e *echo.Echo, grpc *grpc.Server, longTimeout bool) {
 	controller.TaskManager = controller.NewTaskManager()
 	controller.SessionManager = controller.NewSessionsManager()
 
-	e.GET("/api/list_workers", controller.handleListWorkers)
-	e.GET("/api/list_sessions", controller.handleListSessions)
-	e.GET("/api/get_indices", controller.handleGetIndices)
-	e.POST("/api/mark_stale", controller.handleMarkStale)
-	e.POST("/api/start_sample", controller.handleStartSample)
-	e.POST("/api/interact", controller.handleInteract)
-	e.POST("/api/cancel", controller.handleCancel)
-	e.POST("/api/cancel_all", controller.handleCancelAll)
-	e.POST("/api/cancel_notice", controller.handleCancelNotice)
-	e.POST("/api/receive_heartbeat", controller.handleReceiveHeartbeat)
-	e.POST("/api/clean_worker", controller.handleCleanWorker)
-	e.POST("/api/clean_session", controller.handleCleanSession)
-	e.POST("/api/sync_all", controller.handleSyncAll)
-	e.GET("/api/version", controller.handleGetVersion)
+	op.EchoServer.GET("/api/list_workers", controller.handleListWorkers)
+	op.EchoServer.GET("/api/list_sessions", controller.handleListSessions)
+	op.EchoServer.GET("/api/get_indices", controller.handleGetIndices)
+	op.EchoServer.POST("/api/mark_stale", controller.handleMarkStale)
+	op.EchoServer.POST("/api/start_sample", controller.handleStartSample)
+	op.EchoServer.POST("/api/interact", controller.handleInteract)
+	op.EchoServer.POST("/api/cancel", controller.handleCancel)
+	op.EchoServer.POST("/api/cancel_all", controller.handleCancelAll)
+	op.EchoServer.POST("/api/cancel_notice", controller.handleCancelNotice)
+	op.EchoServer.POST("/api/receive_heartbeat", controller.handleReceiveHeartbeat)
+	op.EchoServer.POST("/api/clean_worker", controller.handleCleanWorker)
+	op.EchoServer.POST("/api/clean_session", controller.handleCleanSession)
+	op.EchoServer.POST("/api/sync_all", controller.handleSyncAll)
+	op.EchoServer.GET("/api/version", controller.handleGetVersion)
 
-	pb.RegisterControllerServer(grpc, NewGrpcServer(controller))
+	pb.RegisterControllerServer(op.GrpcServer, NewGrpcServer(controller))
 
 	// background tasks
 	go func() {

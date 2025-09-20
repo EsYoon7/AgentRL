@@ -3,32 +3,33 @@ package cmd
 import (
 	"log"
 
-	"github.com/labstack/echo/v4"
+	"github.com/sasha-s/go-deadlock"
 	"github.com/spf13/cobra"
 	"github.com/thudm/agentrl/controller/internal/utils"
-	"google.golang.org/grpc"
+	"go.uber.org/zap"
 )
 
 type GlobalFlags struct {
-	Host         string
-	Port         uint64
-	Debug        bool
-	Deadlock     bool
-	DashboardDev bool
+	Host           string
+	Port           uint16
+	Debug          bool
+	Deadlock       bool
+	GossipPort     uint16
+	MemberlistJoin []string
 }
 
 var flags = GlobalFlags{}
 
-var echoServer *echo.Echo
-
-var grpcServer *grpc.Server
+var logger *zap.SugaredLogger
 
 var rootCmd = &cobra.Command{
-	Use: "agentrl [flags] [command]",
+	Use: "agentrl [globalFlags] [command]",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		utils.ConfigureDeadlock(flags.Deadlock)
-		echoServer = createEchoServer(&flags)
-		grpcServer = createGrpcServer(&flags)
+		logger = utils.CreateLogger(flags.Debug)
+		deadlock.Opts.Disable = !flags.Deadlock
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		_ = logger.Sync() // flush logger when the program exits
 	},
 }
 
@@ -39,9 +40,10 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&flags.Host, "host", "", "Host to bind to")
-	rootCmd.PersistentFlags().Uint64Var(&flags.Port, "port", 5020, "Port to bind to")
-	rootCmd.PersistentFlags().BoolVar(&flags.Debug, "debug", false, "Enable debug logging")
-	rootCmd.PersistentFlags().BoolVar(&flags.Deadlock, "deadlock", false, "Enable deadlock detection")
-	rootCmd.PersistentFlags().BoolVar(&flags.DashboardDev, "dashboard-dev", false, "Enable dashboard dev mode")
+	rootCmd.PersistentFlags().StringVar(&flags.Host, "host", "", "host to bind to")
+	rootCmd.PersistentFlags().Uint16Var(&flags.Port, "port", 5020, "port to bind to")
+	rootCmd.PersistentFlags().BoolVar(&flags.Debug, "debug", false, "enable debug logging")
+	rootCmd.PersistentFlags().BoolVar(&flags.Deadlock, "deadlock", false, "enable deadlock detection")
+	rootCmd.PersistentFlags().Uint16Var(&flags.GossipPort, "gossip-port", 0, "gossip bind port")
+	rootCmd.PersistentFlags().StringSliceVar(&flags.MemberlistJoin, "join", []string{}, "servers to join")
 }
