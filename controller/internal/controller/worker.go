@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/sasha-s/go-deadlock"
-	"github.com/thudm/agentrl/controller/internal/pb"
+	"github.com/thudm/agentrl/controller/internal/pb/controller_v1"
 	"github.com/thudm/agentrl/controller/internal/types"
 	"github.com/thudm/agentrl/controller/internal/utils"
 	"google.golang.org/grpc"
@@ -31,7 +31,7 @@ const (
 
 type Worker struct {
 	controller *Controller
-	stream     *grpc.BidiStreamingServer[pb.WorkerStreamEnvelope, pb.WorkerStreamEnvelope]
+	stream     *grpc.BidiStreamingServer[controller_v1.WorkerStreamEnvelope, controller_v1.WorkerStreamEnvelope]
 	pendingRpc map[string]*grpcRequest
 	Id         int
 	Name       string
@@ -108,8 +108,8 @@ func (w *Worker) CallGrpc(ctx context.Context, method string, api string, body i
 		return nil, fmt.Errorf("failed to generate ID for gRPC request: %w", err)
 	}
 	requestId := requestUuid.String()
-	requestType := pb.WorkerStreamEnvelope_REQUEST
-	envelope := pb.WorkerStreamEnvelope{
+	requestType := controller_v1.WorkerStreamEnvelope_REQUEST
+	envelope := controller_v1.WorkerStreamEnvelope{
 		Id:        &requestId,
 		Type:      &requestType,
 		Timestamp: timestamppb.Now(),
@@ -123,15 +123,15 @@ func (w *Worker) CallGrpc(ctx context.Context, method string, api string, body i
 			return nil, err
 		}
 	}
-	message := &pb.WorkerStreamEnvelope_WorkerRequest{
+	message := &controller_v1.WorkerStreamEnvelope_WorkerRequest{
 		Method:   &method,
 		Endpoint: &api,
 		Json:     bodyBytes,
 	}
-	envelope.Body = &pb.WorkerStreamEnvelope_WorkerRequest_{WorkerRequest: message}
+	envelope.Body = &controller_v1.WorkerStreamEnvelope_WorkerRequest_{WorkerRequest: message}
 
 	// create channel to receive response
-	respCh := make(chan *pb.WorkerStreamEnvelope, 1)
+	respCh := make(chan *controller_v1.WorkerStreamEnvelope, 1)
 	w.Lock.Lock()
 	w.pendingRpc[requestId] = &grpcRequest{
 		respCh: respCh,
@@ -153,7 +153,7 @@ func (w *Worker) CallGrpc(ctx context.Context, method string, api string, body i
 
 	select {
 	case resp := <-respCh:
-		if resp == nil || resp.GetId() != requestId || resp.GetType() != pb.WorkerStreamEnvelope_RESPONSE {
+		if resp == nil || resp.GetId() != requestId || resp.GetType() != controller_v1.WorkerStreamEnvelope_RESPONSE {
 			return nil, fmt.Errorf("invalid gRPC response for request %s", requestId)
 		}
 
@@ -179,7 +179,7 @@ func (w *Worker) CallGrpc(ctx context.Context, method string, api string, body i
 	}
 }
 
-func (w *Worker) FinalizeGrpcCall(requestId string, response *pb.WorkerStreamEnvelope) {
+func (w *Worker) FinalizeGrpcCall(requestId string, response *controller_v1.WorkerStreamEnvelope) {
 	w.Lock.Lock()
 	defer w.Lock.Unlock()
 

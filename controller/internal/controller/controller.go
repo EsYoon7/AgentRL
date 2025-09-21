@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/thudm/agentrl/controller/internal/pb"
+	"github.com/thudm/agentrl/controller/internal/pb/controller_v1"
 	"github.com/thudm/agentrl/controller/internal/utils"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -69,7 +69,9 @@ func Setup(op *Options) {
 	op.EchoServer.POST("/api/sync_all", controller.handleSyncAll)
 	op.EchoServer.GET("/api/version", controller.handleGetVersion)
 
-	pb.RegisterControllerServer(op.GrpcServer, NewGrpcServer(controller))
+	controller_v1.RegisterControllerServer(op.GrpcServer, &GrpcServer{
+		controller: controller,
+	})
 
 	// background tasks
 	go func() {

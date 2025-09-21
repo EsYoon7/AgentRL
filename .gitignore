@@ -356,10 +356,12 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,linux,visualstudiocode,pycharm+all,python
 
+# generated files
 _version.py
-worker/src/agentrl/worker/pb/*_pb2*
+controller/internal/pb/**/*.pb.go
+worker/src/agentrl/worker/pb/**/*_pb2*
 
-# files produced by some tasks
+# log files produced by some tasks
 debug*/
 log*/
 record*/

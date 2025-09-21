@@ -11,7 +11,7 @@ from google.protobuf import timestamp_pb2
 from grpc.aio import insecure_channel
 from starlette.responses import JSONResponse
 
-from .pb import common_pb2, controller_pb2, controller_pb2_grpc
+from .pb import common_pb2, controller_v1_pb2, controller_v1_pb2_grpc
 
 if TYPE_CHECKING:
     from typing import Any, Optional
@@ -27,7 +27,7 @@ class GrpcTransport:
         assert self.task_worker.controller_address.startswith('grpc://'), \
             'controller address must start with grpc:// to use the grpc transport'
         self.controller_address = self.task_worker.controller_address.replace('grpc://', '').rstrip('/')
-        self.message_queue: Optional[asyncio.Queue[controller_pb2.WorkerStreamEnvelope]] = None
+        self.message_queue: Optional[asyncio.Queue[controller_v1_pb2.WorkerStreamEnvelope]] = None
         self.running = False
         self._stream_task: Optional[asyncio.Task] = None
 
@@ -42,12 +42,12 @@ class GrpcTransport:
             self._stream_task.cancel()
             self._stream_task = None
 
-    async def _put_message(self, msg: controller_pb2.WorkerStreamEnvelope):
+    async def _put_message(self, msg: controller_v1_pb2.WorkerStreamEnvelope):
         await self.message_queue.put(msg)
 
-    async def _route_message(self, msg: controller_pb2.WorkerStreamEnvelope):
+    async def _route_message(self, msg: controller_v1_pb2.WorkerStreamEnvelope):
         self.logger.debug('received gRPC message: %s', msg)
-        if msg.type == controller_pb2.WorkerStreamEnvelope.REQUEST and msg.worker_request:
+        if msg.type == controller_v1_pb2.WorkerStreamEnvelope.REQUEST and msg.worker_request:
             endpoint = msg.worker_request.endpoint
             try:
                 if msg.worker_request.json:
@@ -58,11 +58,11 @@ class GrpcTransport:
                 self.logger.error('failed to decode gRPC request body', exc_info=e)
                 data = None
 
-            response_envelope = controller_pb2.WorkerStreamEnvelope(
+            response_envelope = controller_v1_pb2.WorkerStreamEnvelope(
                 id=msg.id,
-                type=controller_pb2.WorkerStreamEnvelope.RESPONSE,
+                type=controller_v1_pb2.WorkerStreamEnvelope.RESPONSE,
                 timestamp=timestamp_pb2.Timestamp(),
-                worker_response=controller_pb2.WorkerStreamEnvelope.WorkerResponse(
+                worker_response=controller_v1_pb2.WorkerStreamEnvelope.WorkerResponse(
                     code=200,
                     message=None,
                     json=None
@@ -104,11 +104,11 @@ class GrpcTransport:
 
             await self._put_message(response_envelope)
 
-    async def _stream_recv_loop(self, stream: StreamStreamCall[controller_pb2.WorkerStreamEnvelope, controller_pb2.WorkerStreamEnvelope]):
+    async def _stream_recv_loop(self, stream: StreamStreamCall[controller_v1_pb2.WorkerStreamEnvelope, controller_v1_pb2.WorkerStreamEnvelope]):
         async for resp in stream:
             asyncio.create_task(self._route_message(resp))
 
-    async def _stream_send_loop(self, stream: StreamStreamCall[controller_pb2.WorkerStreamEnvelope, controller_pb2.WorkerStreamEnvelope]):
+    async def _stream_send_loop(self, stream: StreamStreamCall[controller_v1_pb2.WorkerStreamEnvelope, controller_v1_pb2.WorkerStreamEnvelope]):
         while True:
             try:
                 msg = await self.message_queue.get()
@@ -123,7 +123,7 @@ class GrpcTransport:
 
     async def _stream_loop(self):
         grpc_channel: Optional[Channel] = None
-        grpc_stream: Optional[StreamStreamCall[controller_pb2.WorkerStreamEnvelope, controller_pb2.WorkerStreamEnvelope]] = None
+        grpc_stream: Optional[StreamStreamCall[controller_v1_pb2.WorkerStreamEnvelope, controller_v1_pb2.WorkerStreamEnvelope]] = None
         send_task: Optional[asyncio.Task] = None
         recv_task: Optional[asyncio.Task] = None
 
@@ -132,7 +132,7 @@ class GrpcTransport:
                 grpc_channel = insecure_channel(self.controller_address, options=[
                     ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100 MB
                 ])
-                grpc_stub = controller_pb2_grpc.ControllerStub(grpc_channel)
+                grpc_stub = controller_v1_pb2_grpc.ControllerStub(grpc_channel)
 
                 grpc_stream = grpc_stub.WorkerStream()
                 await grpc_stream.wait_for_connection()
@@ -179,11 +179,11 @@ class GrpcTransport:
 
     async def send_heartbeat(self):
         # read information from the task worker and send a heartbeat
-        envelope = controller_pb2.WorkerStreamEnvelope(
+        envelope = controller_v1_pb2.WorkerStreamEnvelope(
             id=str(uuid4()),
-            type=controller_pb2.WorkerStreamEnvelope.HEARTBEAT,
+            type=controller_v1_pb2.WorkerStreamEnvelope.HEARTBEAT,
             timestamp=timestamp_pb2.Timestamp(),
-            receive_heartbeat_request=controller_pb2.ReceiveHeartbeatRequest(
+            receive_heartbeat_request=controller_v1_pb2.ReceiveHeartbeatRequest(
                 id=self.task_worker.worker_id,
                 name=self.task_worker.task.name,
                 concurrency=self.task_worker.task.concurrency,
@@ -202,11 +202,11 @@ class GrpcTransport:
 
     async def send_cancel_notice(self, session_id: int):
         # send a cancel notice to the controller
-        envelope = controller_pb2.WorkerStreamEnvelope(
+        envelope = controller_v1_pb2.WorkerStreamEnvelope(
             id=str(uuid4()),
-            type=controller_pb2.WorkerStreamEnvelope.REQUEST,
+            type=controller_v1_pb2.WorkerStreamEnvelope.REQUEST,
             timestamp=timestamp_pb2.Timestamp(),
-            session_cancel_notice=controller_pb2.SessionCancelNotice(
+            session_cancel_notice=controller_v1_pb2.SessionCancelNotice(
                 session_id=session_id
             )
         )
@@ -221,11 +221,11 @@ class GrpcTransport:
         except ValueError as e:
             self.logger.error('failed to encode gRPC body', exc_info=e)
             data = None
-        request_envelope = controller_pb2.WorkerStreamEnvelope(
+        request_envelope = controller_v1_pb2.WorkerStreamEnvelope(
             id=str(uuid4()),
-            type=controller_pb2.WorkerStreamEnvelope.REQUEST,
+            type=controller_v1_pb2.WorkerStreamEnvelope.REQUEST,
             timestamp=timestamp_pb2.Timestamp(),
-            worker_request=controller_pb2.WorkerStreamEnvelope.WorkerRequest(
+            worker_request=controller_v1_pb2.WorkerStreamEnvelope.WorkerRequest(
                 method=method,
                 endpoint=endpoint,
                 json=data

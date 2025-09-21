@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/thudm/agentrl/controller/internal/pb"
+	"github.com/thudm/agentrl/controller/internal/pb/controller_v1"
 	"github.com/thudm/agentrl/controller/internal/types"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -15,11 +16,11 @@ import (
 
 type GrpcServer struct {
 	controller *Controller
-	pb.UnimplementedControllerServer
+	controller_v1.UnimplementedControllerServer
 }
 
 type grpcRequest struct {
-	respCh chan<- *pb.WorkerStreamEnvelope
+	respCh chan<- *controller_v1.WorkerStreamEnvelope
 }
 
 func (g *GrpcServer) convertTaskIndex(index *pb.TaskIndex) types.TaskIndex {
@@ -42,7 +43,7 @@ func (g *GrpcServer) convertTaskIndex(index *pb.TaskIndex) types.TaskIndex {
 	return types.TaskIndex{}
 }
 
-func (g *GrpcServer) workerResponse(requestId string, err error, data interface{}) *pb.WorkerStreamEnvelope {
+func (g *GrpcServer) workerResponse(requestId string, err error, data interface{}) *controller_v1.WorkerStreamEnvelope {
 	var respCode int32 = http.StatusOK
 	respMessage := ""
 
@@ -63,7 +64,7 @@ func (g *GrpcServer) workerResponse(requestId string, err error, data interface{
 		}
 	}
 
-	resp := &pb.WorkerStreamEnvelope_WorkerResponse{
+	resp := &controller_v1.WorkerStreamEnvelope_WorkerResponse{
 		Code:    &respCode,
 		Message: &respMessage,
 		Json:    nil,
@@ -77,18 +78,18 @@ func (g *GrpcServer) workerResponse(requestId string, err error, data interface{
 		resp.Json = jsonBytes
 	}
 
-	respType := pb.WorkerStreamEnvelope_RESPONSE
-	return &pb.WorkerStreamEnvelope{
+	respType := controller_v1.WorkerStreamEnvelope_RESPONSE
+	return &controller_v1.WorkerStreamEnvelope{
 		Id:        &requestId,
 		Type:      &respType,
 		Timestamp: timestamppb.Now(),
-		Body: &pb.WorkerStreamEnvelope_WorkerResponse_{
+		Body: &controller_v1.WorkerStreamEnvelope_WorkerResponse_{
 			WorkerResponse: resp,
 		},
 	}
 }
 
-func (g *GrpcServer) WorkerStream(stream grpc.BidiStreamingServer[pb.WorkerStreamEnvelope, pb.WorkerStreamEnvelope]) error {
+func (g *GrpcServer) WorkerStream(stream grpc.BidiStreamingServer[controller_v1.WorkerStreamEnvelope, controller_v1.WorkerStreamEnvelope]) error {
 	var worker *Worker = nil
 
 	defer func() {
@@ -114,7 +115,7 @@ func (g *GrpcServer) WorkerStream(stream grpc.BidiStreamingServer[pb.WorkerStrea
 		requestType := in.GetType()
 
 		switch requestType {
-		case pb.WorkerStreamEnvelope_HEARTBEAT:
+		case controller_v1.WorkerStreamEnvelope_HEARTBEAT:
 			request := in.GetReceiveHeartbeatRequest()
 			if request == nil {
 				g.controller.Logger.Errorf("failed to parse heartbeat request: %v", in)
@@ -139,7 +140,7 @@ func (g *GrpcServer) WorkerStream(stream grpc.BidiStreamingServer[pb.WorkerStrea
 				continue
 			}
 
-		case pb.WorkerStreamEnvelope_REQUEST:
+		case controller_v1.WorkerStreamEnvelope_REQUEST:
 			if message := in.GetSessionCancelNotice(); message != nil {
 				sessionId := int(message.GetSessionId())
 				err = g.controller.handleCancelNoticeGeneric(sessionId)
@@ -149,16 +150,10 @@ func (g *GrpcServer) WorkerStream(stream grpc.BidiStreamingServer[pb.WorkerStrea
 				}
 			}
 
-		case pb.WorkerStreamEnvelope_RESPONSE:
+		case controller_v1.WorkerStreamEnvelope_RESPONSE:
 			if worker != nil {
 				worker.FinalizeGrpcCall(requestId, in)
 			}
 		}
-	}
-}
-
-func NewGrpcServer(controller *Controller) pb.ControllerServer {
-	return &GrpcServer{
-		controller: controller,
 	}
 }
