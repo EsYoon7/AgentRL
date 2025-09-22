@@ -16,7 +16,7 @@ type HttpOptions struct {
 	LongTimeout  bool
 }
 
-func CreateHttpServer(op *HttpOptions) (*echo.Echo, *http.Server) {
+func NewHttpServer(op HttpOptions) (*echo.Echo, *http.Server) {
 	e := echo.New()
 	e.Use(middleware.Recover())
 	e.Use(middleware.Gzip())

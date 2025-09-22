@@ -32,7 +32,7 @@ type Options struct {
 	LongTimeout bool
 }
 
-func Setup(op *Options) {
+func Setup(op Options) {
 	controller := &Controller{
 		Logger:             op.Logger,
 		Transport:          utils.NewTransport(),

@@ -19,23 +19,26 @@ var controllerCmd = &cobra.Command{
 	Short: "AgentRL controller",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		echo, http := server.CreateHttpServer(&server.HttpOptions{
+		echo, http := server.NewHttpServer(server.HttpOptions{
 			Dashboard:    controllerFlags.Dashboard,
 			DashboardDev: controllerFlags.DashboardDev,
 			Debug:        flags.Debug,
 			LongTimeout:  controllerFlags.LongTimeout,
 		})
 
-		grpc := server.CreateGrpcServer()
+		grpc := server.NewGrpcServer(server.GrpcOptions{
+			Logger:      logger.Named("grpc"),
+			LongTimeout: controllerFlags.LongTimeout,
+		})
 
-		controller.Setup(&controller.Options{
+		controller.Setup(controller.Options{
 			Logger:      logger.Named("controller"),
 			EchoServer:  echo,
 			GrpcServer:  grpc,
 			LongTimeout: controllerFlags.LongTimeout,
 		})
 
-		server.StartServer(&server.StartServerOptions{
+		server.StartServer(server.StartServerOptions{
 			Host:       flags.Host,
 			Port:       flags.Port,
 			HttpServer: http,

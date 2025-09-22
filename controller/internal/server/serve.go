@@ -20,7 +20,7 @@ type StartServerOptions struct {
 	Logger     *zap.SugaredLogger
 }
 
-func StartServer(op *StartServerOptions) {
+func StartServer(op StartServerOptions) {
 	if op.HttpServer == nil && op.GrpcServer == nil {
 		op.Logger.Fatal("no servers to start")
 	}
@@ -38,7 +38,12 @@ func StartServer(op *StartServerOptions) {
 	m := cmux.New(listener)
 
 	if op.GrpcServer != nil {
-		grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+		var grpcL net.Listener
+		if op.HttpServer == nil {
+			grpcL = m.Match(cmux.Any())
+		} else {
+			grpcL = m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+		}
 
 		go func() {
 			if err = op.GrpcServer.Serve(grpcL); !errors.Is(err, grpc.ErrServerStopped) {

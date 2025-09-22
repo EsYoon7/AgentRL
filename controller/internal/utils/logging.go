@@ -2,7 +2,7 @@ package utils
 
 import "go.uber.org/zap"
 
-func CreateLogger(debug bool) *zap.SugaredLogger {
+func NewLogger(debug bool) *zap.SugaredLogger {
 	var logger *zap.Logger
 
 	if debug {

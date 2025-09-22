@@ -25,7 +25,7 @@ var logger *zap.SugaredLogger
 var rootCmd = &cobra.Command{
 	Use: "agentrl [globalFlags] [command]",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		logger = utils.CreateLogger(flags.Debug)
+		logger = utils.NewLogger(flags.Debug)
 		deadlock.Opts.Disable = !flags.Deadlock
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
