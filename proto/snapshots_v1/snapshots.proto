@@ -15,11 +15,16 @@ message Snapshot {
   string task_name = 5;
   TaskIndex task_index = 6;
   string env_type = 7;
-  string node = 8;
-  google.protobuf.Timestamp created_at = 9;
+  int64 session_id = 8;
+  int32 step = 9;
+
+  string node = 100;
+  google.protobuf.Timestamp created_at = 101;
 }
 
 service SnapshotsManager {
+  rpc GetStorePath(google.protobuf.Empty) returns (GetStorePathResponse);
+
   rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
   rpc MarkReady(MarkReadyRequest) returns (google.protobuf.Empty);
 
@@ -30,13 +35,23 @@ service SnapshotsManager {
   rpc StreamArchive(StreamArchiveRequest) returns (stream ArchiveChunk);
 }
 
+message GetStorePathResponse {
+  string root_path = 1;
+
+  uint64 total_bytes = 11;
+  uint64 free_bytes = 12;
+}
+
 message CreateSnapshotRequest {
   string task_type = 1;
   string task_name = 2;
   TaskIndex task_index = 3;
   string env_type = 4;
   string parent_id = 5;
-  uint64 expected_size = 6;
+  int64 session_id = 6;
+  int32 step = 7;
+
+  uint64 expected_size = 100;
 }
 
 message CreateSnapshotResponse {
@@ -54,8 +69,11 @@ message ListSnapshotsRequest {
   TaskIndex task_index = 3;
   string env_type = 4;
   string parent_id = 5;
-  uint32 page_size = 6;
-  string page_token = 7;
+  int64 session_id = 6;
+  int32 step = 7;
+
+  uint32 page_size = 100;
+  string page_token = 101;
 }
 
 message ListSnapshotsResponse {

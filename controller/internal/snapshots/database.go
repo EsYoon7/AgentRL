@@ -27,6 +27,8 @@ var migration = []string{
 		task_name  text,
 		task_index text,
 		env_type   text,
+		session_id bigint,
+		step       integer,
 		node       text NOT NULL,
 		size       bigint,
 		created_at timestamptz NOT NULL DEFAULT now(),
@@ -35,8 +37,10 @@ var migration = []string{
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_hierarchy ON snapshots USING GIST (hierarchy)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_type ON snapshots USING HASH (task_type)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_name ON snapshots USING HASH (task_name)`,
-	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_index ON snapshots USING HASH (task_index)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_index ON snapshots (task_index)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_env_type ON snapshots USING HASH (env_type)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshots_session_id ON snapshots (session_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshots_step ON snapshots (step)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_node ON snapshots USING HASH (node)`,
 }
 
@@ -50,6 +54,8 @@ type DatabaseRecord struct {
 	TaskName  sql.NullString
 	TaskIndex types.NullTaskIndex
 	EnvType   sql.NullString
+	SessionID sql.NullInt64
+	Step      sql.NullInt32
 	Node      string
 	Size      sql.NullInt64
 	CreatedAt time.Time
@@ -90,9 +96,9 @@ func (db *Database) CreateSnapshot(ctx context.Context, record *DatabaseRecord) 
 
 	err := db.withTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO snapshots (id, hierarchy, task_type, task_name, task_index, env_type, node)
-			VALUES ($1::uuid, $1::text::ltree, $2, $3, $4, $5, $6)
-		`, record.ID, record.TaskType, record.TaskName, record.TaskIndex, record.EnvType, record.Node); err != nil {
+			INSERT INTO snapshots (id, hierarchy, task_type, task_name, task_index, env_type, session_id, step, node)
+			VALUES ($1::uuid, $1::text::ltree, $2, $3, $4, $5, $6, $7, $8)
+		`, record.ID, record.TaskType, record.TaskName, record.TaskIndex, record.EnvType, record.SessionID, record.Step, record.Node); err != nil {
 			return err
 		}
 
@@ -143,6 +149,14 @@ func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, 
 			args = append(args, example.EnvType)
 			clauses = append(clauses, fmt.Sprintf("env_type = $%d", len(args)))
 		}
+		if example.SessionID.Valid {
+			args = append(args, example.SessionID)
+			clauses = append(clauses, fmt.Sprintf("session_id = $%d", len(args)))
+		}
+		if example.Step.Valid {
+			args = append(args, example.Step)
+			clauses = append(clauses, fmt.Sprintf("step = $%d", len(args)))
+		}
 		if example.ID != uuid.Nil {
 			// use as page token for keyset pagination
 			args = append(args, example.ID)
@@ -154,7 +168,7 @@ func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, 
 
 	// build query
 	queryBuilder.WriteString(`
-		SELECT id, parent_id, hierarchy, task_type, task_name, task_index, env_type, node, size, created_at
+		SELECT id, parent_id, hierarchy, task_type, task_name, task_index, env_type, session_id, step, node, size, created_at
 		FROM snapshots WHERE
 	`)
 	queryBuilder.WriteString(strings.Join(clauses, " AND "))
@@ -181,6 +195,8 @@ func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, 
 			&r.TaskName,
 			&r.TaskIndex,
 			&r.EnvType,
+			&r.SessionID,
+			&r.Step,
 			&r.Node,
 			&r.Size,
 			&r.CreatedAt,
@@ -200,7 +216,7 @@ func (db *Database) GetSnapshot(ctx context.Context, id string) (*DatabaseRecord
 	record := &DatabaseRecord{}
 
 	if err := db.conn.QueryRow(ctx, `
-		SELECT id, parent_id, hierarchy, task_type, task_name, task_index, env_type, node, size, created_at
+		SELECT id, parent_id, hierarchy, task_type, task_name, task_index, env_type, session_id, step, node, size, created_at
 		FROM snapshots WHERE id = $1 AND size IS NOT NULL
 	`, id).Scan(
 		&record.ID,
@@ -210,6 +226,8 @@ func (db *Database) GetSnapshot(ctx context.Context, id string) (*DatabaseRecord
 		&record.TaskName,
 		&record.TaskIndex,
 		&record.EnvType,
+		&record.SessionID,
+		&record.Step,
 		&record.Node,
 		&record.Size,
 		&record.CreatedAt,

@@ -100,12 +100,34 @@ func (s *Server) convertDBRecord(record *DatabaseRecord) *snapshots_v1.Snapshot 
 		snapshot.EnvType = &record.EnvType.String
 	}
 
+	if record.SessionID.Valid {
+		snapshot.SessionId = &record.SessionID.Int64
+	}
+
+	if record.Step.Valid {
+		snapshot.Step = &record.Step.Int32
+	}
+
 	node := record.Node
 	snapshot.Node = &node
 
 	snapshot.CreatedAt = timestamppb.New(record.CreatedAt)
 
 	return snapshot
+}
+
+func (s *Server) GetStorePath(_ context.Context, _ *emptypb.Empty) (*snapshots_v1.GetStorePathResponse, error) {
+	path := s.manager.Store.RootPath
+	total, free, err := utils.DiskUsage(path)
+	if err != nil {
+		s.logger.Warnf("failed to get disk usage for path %s: %v", path, err)
+	}
+
+	return &snapshots_v1.GetStorePathResponse{
+		RootPath:   &path,
+		TotalBytes: &total,
+		FreeBytes:  &free,
+	}, nil
 }
 
 func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.CreateSnapshotRequest) (*snapshots_v1.CreateSnapshotResponse, error) {
@@ -122,6 +144,14 @@ func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.Creat
 		EnvType: sql.NullString{
 			String: request.GetEnvType(),
 			Valid:  request.EnvType != nil,
+		},
+		SessionID: sql.NullInt64{
+			Int64: request.GetSessionId(),
+			Valid: request.SessionId != nil,
+		},
+		Step: sql.NullInt32{
+			Int32: request.GetStep(),
+			Valid: request.Step != nil,
 		},
 		Node: s.manager.NodeRegistry.LocalName(),
 	}
@@ -193,6 +223,14 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 		EnvType: sql.NullString{
 			String: request.GetEnvType(),
 			Valid:  request.EnvType != nil,
+		},
+		SessionID: sql.NullInt64{
+			Int64: request.GetSessionId(),
+			Valid: request.SessionId != nil,
+		},
+		Step: sql.NullInt32{
+			Int32: request.GetStep(),
+			Valid: request.Step != nil,
 		},
 	}
 
