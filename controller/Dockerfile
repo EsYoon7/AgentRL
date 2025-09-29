@@ -45,10 +45,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY proto /tmp/proto
 RUN mkdir -p /app/internal/pb && \
-    protoc --proto_path=/tmp/proto \
+    find /tmp/proto -type f -name '*.proto' -print0 | \
+    xargs -0 \
+      protoc --proto_path=/tmp/proto \
       --go_out=internal/pb --go_opt=paths=source_relative \
-      --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative \
-      /tmp/proto/*.proto
+      --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative
 
 COPY controller /app
 COPY --from=dashboard-builder /app/dist /app/dashboard/dist
