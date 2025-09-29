@@ -1,7 +1,8 @@
+from .._typings import StateDriver
 from ._base import StateProvider
 
 
-def create_state_provider(driver: str, prefix: str = '', **config) -> StateProvider:
+def create_state_provider(driver: StateDriver, prefix: str = '', **config) -> StateProvider:
     if driver == 'local':
         from .local import LocalStateProvider
         return LocalStateProvider()

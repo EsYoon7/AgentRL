@@ -1,8 +1,9 @@
 from ._base import EnvironmentController
 from ._delegation import EnvironmentDelegation
+from ._typings import EnvironmentDriver, EnvironmentOptions
 
 
-def create_controller(driver: str, delegation: EnvironmentDelegation, **config) -> EnvironmentController:
+def create_controller(driver: EnvironmentDriver, delegation: EnvironmentDelegation, **config) -> EnvironmentController:
     if driver == 'manual':
         from .manual import ManualEnvironmentController
         return ManualEnvironmentController(
