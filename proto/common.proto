@@ -1,0 +1,26 @@
+edition = "2023";
+
+package agentbench;
+option go_package = "github.com/thudm/agentrl/controller/internal/pb;pb";
+
+option features.utf8_validation = NONE;
+
+import "google/protobuf/struct.proto";
+
+message TaskIndex {
+  oneof value {
+    int64 int_value = 1;
+    string string_value = 2;
+  }
+}
+
+message ChatMessage {
+  string role = 1;
+  oneof content {
+    string text = 2;
+    google.protobuf.ListValue parts = 3;
+  }
+  google.protobuf.ListValue tool_calls = 4;
+  google.protobuf.Value name = 5;
+  google.protobuf.Value tool_call_id = 6;
+}

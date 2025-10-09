@@ -1,0 +1,61 @@
+[build-system]
+requires = [
+  "setuptools>=80",
+  "setuptools-scm>=8",
+  "grpcio-tools~=1.73.0"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentrl-worker"
+description = "Task worker of AgentRL: Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework"
+requires-python = ">=3.9"
+license = "MIT"
+classifiers = [
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed"
+]
+dynamic = ["version"]
+
+dependencies = [
+  "pydantic~=2.0",
+  "pyyaml~=6.0",
+  "aiohttp",
+  "uvicorn",
+  "fastapi",
+  "urllib3",
+  "openai~=1.0",
+  "httpx[socks]",
+  "pytz",
+  "aiodocker",
+  "redis[hiredis]",
+  "aiohttp_socks",
+  "pysocks",
+  "grpcio~=1.73",
+  "protobuf~=6.0"
+]
+
+[project.readme]
+text = "See the [README](https://github.com/THUDM/AgentRL/blob/main/README.md) for full docs."
+content-type = "text/markdown"
+
+[project.urls]
+Repository = "https://github.com/THUDM/AgentRL"
+Issues = "https://github.com/THUDM/AgentRL/issues"
+
+[tool.setuptools]
+include-package-data = true
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+root = ".."
+version_scheme = "no-guess-dev"
+local_scheme = "node-and-date"
+version_file = "src/agentrl/worker/_version.py"
+relative_to = "pyproject.toml"
+tag_regex = "^worker-v?(?P<version>.+)$"
+fallback_version = "0.2.0"  # the version that added this mechanism

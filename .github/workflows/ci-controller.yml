@@ -1,0 +1,185 @@
+name: Controller CI
+
+on:
+  push:
+    tags:
+      - 'controller-*'
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/ci-controller.yml'
+      - 'controller/**'
+      - 'proto/**'
+  pull_request:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/ci-controller.yml'
+      - 'controller/**'
+      - 'proto/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build only, do not push images or upload release assets'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write          # for release assets
+  packages: write          # push to GHCR
+  id-token: write          # future-proof (cosign/attestations etc.)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docker-image:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: jingbh/agentrl-controller
+          tags: |
+            type=match,pattern=controller-(.+),group=1
+            type=ref,event=branch
+            type=ref,event=pr
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./controller/Dockerfile
+          platforms: |
+            linux/amd64,linux/arm64,linux/arm/v7,linux/s390x,linux/ppc64le
+          push: ${{ !inputs.dry_run }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=controller-image
+          cache-to: type=gha,mode=max,scope=controller-image
+
+  build-binaries:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - windows/amd64
+          - windows/arm64
+          - darwin/amd64
+          - darwin/arm64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - id: args
+        shell: bash
+        run: |
+          set -euo pipefail
+          t='${{ matrix.platform }}'
+          os="${t%%/*}"
+          rest="${t#*/}"
+          if [[ "$rest" == */* ]]; then
+            arch="${rest%%/*}"
+            variant="${rest##*/}"
+          else
+            arch="$rest"
+            variant=""
+          fi
+
+          case "$os" in
+            windows|darwin) ext="zip" ;;
+            *)              ext="tar.gz" ;;
+          esac
+
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+          echo "ext=$ext" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: .
+          file: ./controller/Dockerfile
+          target: binary
+          push: false
+          outputs: type=local,dest=out
+          build-args: |
+            TARGETOS=${{ steps.args.outputs.os }}
+            TARGETARCH=${{ steps.args.outputs.arch }}
+            TARGETVARIANT=${{ steps.args.outputs.variant }}
+          cache-from: type=gha,scope=controller-builder
+          cache-to: type=gha,mode=max,scope=controller-builder
+
+      - id: pack
+        run: |
+          set -euo pipefail
+          os='${{ steps.args.outputs.os }}'
+          arch='${{ steps.args.outputs.arch }}'
+          variant='${{ steps.args.outputs.variant }}'
+          ext='${{ steps.args.outputs.ext }}'
+
+          BIN="out/agentrl"
+          test -f "$BIN" || { echo "Binary not found at $BIN"; ls -R out; exit 1; }
+
+          mkdir -p artifacts
+          tag="$os-$arch"
+          [[ -n "$variant" ]] && tag="$tag-$variant"
+          filename="agentrl-${tag}"
+
+          if [[ "$ext" == "zip" ]]; then
+            filename="${filename}.zip"
+            zip -j "artifacts/${filename}" "$BIN"
+          else
+            filename="${filename}.tar.gz"
+            tar -C "$(dirname "$BIN")" -czf "artifacts/${filename}" "$(basename "$BIN")"
+          fi
+
+          echo "asset=artifacts/${filename}" >> "$GITHUB_OUTPUT"
+          echo "filename=${filename}" >> "$GITHUB_OUTPUT"
+          echo "Built $os/$arch/$variant -> artifacts/${filename}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.filename }}
+          path: ${{ steps.pack.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/controller-')
+    needs:
+      - build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: 'agentrl-*'
+          merge-multiple: true
+          path: artifacts
+      - run: ls -R artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**
+          generate_release_notes: true

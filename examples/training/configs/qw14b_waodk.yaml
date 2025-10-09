@@ -1,0 +1,78 @@
+model_path: /path/to/model/Qwen2.5-14B-Instruct
+max_steps: 1000
+bucket_size: 2.0e9
+val_before_train: True
+rollout_ratio: 0.5
+run_name: qw14b-waodk
+project_name: abc_rl
+save_path: /path/to/output/ckpt/
+save_interval: 100000
+val_interval: 25
+rollout_stale_ratio: 0.25
+stale_step: 25
+task_adv_norm: True
+train:
+  batch_size: 256
+  concurrency: 2048
+  n: 8
+val:
+  concurrency: 512
+  n: 4
+rollout:
+  tp_size: 1
+  use_force_cancel: True
+  server_args:
+    disable_cuda_graph: False
+  sampling_params:
+    temperature: 0.8
+    max_new_tokens: 1024
+actor:
+  torch_dtype: float32
+  fsdp_size: 16
+  loss_reduce_mode: token-mean
+  max_tokens_per_micro_batch: 16384
+  max_ckpt_to_keep: 1
+  enable_gradient_checkpointing: True
+  reshard_after_forward: True
+  model_input_keys:
+    - input_ids
+    - position_ids
+  optim:
+    lr: 1.0e-6
+    weight_decay: 0
+ref:
+  torch_dtype: bfloat16
+  reshard_after_forward: True
+loss:
+  temperature: 0.8
+  use_kl_loss: True
+  kl_loss_coef: 1.0e-4
+  clip_ratio: 0.2
+  clip_ratio_low: 0.2
+  clip_ratio_high: 0.2
+  clip_ratio_c: 3.0
+  entropy_coef: 0.0
+task:
+  # url of the controller api here
+  base_url: http://localhost:5020/api
+  use_native_coroutine: True
+  incomplete_punishment: -0.2
+  max_total_len: 8192
+  max_turns: 20
+  train_tasks:
+    - webshop-env_train
+    - alfworld-env_train
+    - os-env_train
+    - dbbench-env_train
+    - kg-env_train-v2
+  val_tasks:
+    - webshop-std
+    - alfworld-std
+    - os-std
+    - dbbench-std
+    - kg-std-v2
+  loop_start_args:
+    - name
+    - index
+advantage:
+  adv_estimator: grpo

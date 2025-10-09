@@ -1,0 +1,30 @@
+@layer theme, base, components, utilities;
+@import "ant-design-vue/dist/reset.css" layer(base);
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+  --color-alive: var(--color-alive, var(--color-green-600));
+  --color-coma: var(--color-coma, var(--color-amber-600));
+  --color-dead: var(--color-dead, var(--color-red-600));
+}
+
+@layer base {
+  [data-a11y] {
+    --color-alive: #8f9d6a;
+    --color-coma: #d7da16;
+    --color-dead: #ff0000;
+  }
+}
+
+@layer components {
+  .ant-collapse-header {
+    align-items: center !important;
+  }
+}
+
+@layer utilities {
+  .transition-inherit {
+    transition: inherit;
+  }
+}

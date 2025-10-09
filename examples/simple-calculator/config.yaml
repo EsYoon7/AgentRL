@@ -1,0 +1,10 @@
+# The minimal configuration example for the simple-calculator task,
+# demonstrating how to define the task module and its parameters.
+
+simple-calculator:
+  module: task.SimpleCalculatorTask
+  parameters:
+    name: simple-calculator
+    concurrency: 32
+    max_rounds: 5
+    number_of_indices: 20

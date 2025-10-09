@@ -1,0 +1,66 @@
+name: Worker CI
+
+on:
+  push:
+    tags:
+      - 'worker-*'
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/ci-worker.yml'
+      - 'worker/**'
+      - 'proto/**'
+  pull_request:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/ci-worker.yml'
+      - 'worker/**'
+      - 'proto/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build only, do not publish to PyPI'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write   # for PyPI Trusted Publisher (recommended)
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-package:
+    name: Build Python Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '>=3.13'
+          cache: 'pip'
+
+      - run: python -m pip install --upgrade pip build packaging
+      - run: python -m build worker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-dist
+          path: worker/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - if: startsWith(github.ref, 'refs/tags/worker-') && !inputs.dry_run
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages_dir: worker/dist
+
+      - if: startsWith(github.ref, 'refs/tags/worker-') && !inputs.dry_run
+        uses: softprops/action-gh-release@v2
+        with:
+          files: worker/dist/*
+          generate_release_notes: true
