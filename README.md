@@ -19,7 +19,6 @@ Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework
   - [Task Worker](#task-worker)
   - [Transport Layer](#transport-layer)
   - [Deployment](#deployment)
-  - [Tasks](#tasks)
 - [License](#license)
 - [Citation](#citation)
 
@@ -207,7 +206,8 @@ parsing and executing the agent's response, and evaluating the agent's performan
 
 The core of the task worker is the `TaskWorker` class located in `agentrl/task_worker.py`,
 which is essentially a FastAPI server that serves API to access a specific `Task`.
-Refer to the [Extending Tasks](#extending-tasks) section for more details on how to add new tasks.
+
+See our integrated tasks and instructions of how to add new tasks in [`docs/tasks.md`](docs/tasks.md).
 
 ### Transport Layer
 
@@ -218,11 +218,6 @@ On top of that, we provide a gRPC implementation that allows the controller to c
 ### Deployment
 
 See the details of how to deploy the environment framework in [`docs/deployment.md`](docs/deployment.md).
-
-### Tasks
-
-See our integrated tasks and instructions of how to add new tasks
-in the environment framework in [`docs/tasks.md`](docs/tasks.md).
 
 ## Acknowledgements
 
