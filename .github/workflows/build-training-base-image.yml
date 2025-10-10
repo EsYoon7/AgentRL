@@ -45,8 +45,8 @@ jobs:
           context: .
           file: extra/docker/training-base.Dockerfile
           push: true
-          tags: ${{ github.repository == 'THUDM/AgentRL' && format('{0}/training-base:25.03-cu128-torch271-sglang048', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:25.03-cu128-torch271-sglang048', steps.repo_slug.outputs.repo_lower) }}
+          tags: ${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:25.03-cu128-torch271-sglang048', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:25.03-cu128-torch271-sglang048', steps.repo_slug.outputs.repo_lower) }}
           cache-from: |
-            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }}
+            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }}
           cache-to: |
-            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }},mode=max
+            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }},mode=max
