@@ -58,4 +58,5 @@ local_scheme = "node-and-date"
 version_file = "src/agentrl/worker/_version.py"
 relative_to = "pyproject.toml"
 tag_regex = "^worker-v?(?P<version>.+)$"
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "worker-v*"]
 fallback_version = "0.2.0"  # the version that added this mechanism

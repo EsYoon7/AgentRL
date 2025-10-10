@@ -54,7 +54,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - if: startsWith(github.ref, 'refs/tags/worker-') && !inputs.dry_run
+      - if: startsWith(github.ref, 'refs/tags/worker-') && !inputs.dry_run && github.repository == 'THUDM/AgentRL'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages_dir: worker/dist
