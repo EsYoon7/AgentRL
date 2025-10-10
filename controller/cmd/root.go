@@ -10,12 +10,13 @@ import (
 )
 
 type GlobalFlags struct {
-	Host           string
-	Port           uint16
-	Debug          bool
-	Deadlock       bool
-	GossipPort     uint16
-	MemberlistJoin []string
+	Host            string
+	Port            uint16
+	Debug           bool
+	Deadlock        bool
+	GossipAdvertise string
+	GossipPort      uint16
+	MemberlistJoin  []string
 }
 
 var flags = GlobalFlags{}
@@ -44,6 +45,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint16Var(&flags.Port, "port", 5020, "port to bind to")
 	rootCmd.PersistentFlags().BoolVar(&flags.Debug, "debug", false, "enable debug logging")
 	rootCmd.PersistentFlags().BoolVar(&flags.Deadlock, "deadlock", false, "enable deadlock detection")
+	rootCmd.PersistentFlags().StringVar(&flags.GossipAdvertise, "gossip-advertise", "", "gossip advertise address")
 	rootCmd.PersistentFlags().Uint16Var(&flags.GossipPort, "gossip-port", 0, "gossip bind port")
 	rootCmd.PersistentFlags().StringSliceVar(&flags.MemberlistJoin, "join", []string{}, "servers to join")
 }

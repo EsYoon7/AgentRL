@@ -10,17 +10,22 @@ import (
 )
 
 type MemberlistOptions struct {
-	BindHost string
-	BindPort uint16
-	Join     []string
-	Logger   *zap.SugaredLogger
-	NodeInfo *NodeInfo
+	AdvertiseHost string
+	BindHost      string
+	BindPort      uint16
+	Join          []string
+	Logger        *zap.SugaredLogger
+	NodeInfo      *NodeInfo
 }
 
 func NewMemberlist(op MemberlistOptions) *NodeRegistry {
 	registry := newRegistry()
 
 	config := memberlist.DefaultLANConfig()
+
+	if op.AdvertiseHost != "" {
+		config.AdvertiseAddr = op.AdvertiseHost
+	}
 
 	if op.BindHost != "" {
 		config.BindAddr = op.BindHost

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/thudm/agentrl/controller/internal/pb"
 	"github.com/thudm/agentrl/controller/internal/pb/snapshots_v1"
@@ -58,14 +59,12 @@ func (s *Server) convertTaskIndex(index *pb.TaskIndex) types.NullTaskIndex {
 }
 
 func (s *Server) convertDBRecord(record *DatabaseRecord) *snapshots_v1.Snapshot {
-	snapshot := &snapshots_v1.Snapshot{}
-
-	id := record.ID.String()
-	snapshot.Id = &id
+	snapshot := &snapshots_v1.Snapshot{
+		Id: proto.String(record.ID.String()),
+	}
 
 	if record.ParentID.Valid {
-		parentId := record.ParentID.UUID.String()
-		snapshot.ParentId = &parentId
+		snapshot.ParentId = proto.String(record.ParentID.UUID.String())
 	}
 
 	hierarchy := strings.Split(record.Hierarchy, ".")
@@ -108,9 +107,7 @@ func (s *Server) convertDBRecord(record *DatabaseRecord) *snapshots_v1.Snapshot 
 		snapshot.Step = &record.Step.Int32
 	}
 
-	node := record.Node
-	snapshot.Node = &node
-
+	snapshot.Node = proto.String(record.Node)
 	snapshot.CreatedAt = timestamppb.New(record.CreatedAt)
 
 	return snapshot
@@ -266,8 +263,7 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 	}
 	resp.PreviousPageToken = request.PageToken
 	if len(res) > 0 && len(res) == int(request.GetPageSize()) {
-		nextToken := res[len(res)-1].ID.String()
-		resp.NextPageToken = &nextToken
+		resp.NextPageToken = proto.String(res[len(res)-1].ID.String())
 	}
 
 	return resp, nil
@@ -504,14 +500,11 @@ func (s *Server) StreamArchive(request *snapshots_v1.StreamArchiveRequest, strea
 		}
 	}
 
-	total := counter.Count()
-	sumHex := hex.EncodeToString(hasher.Sum(nil))
-
 	return stream.Send(&snapshots_v1.ArchiveChunk{
 		Payload: &snapshots_v1.ArchiveChunk_Eof{
 			Eof: &snapshots_v1.ArchiveChunk_EOF{
-				TotalSize: &total,
-				Sha256Tar: &sumHex,
+				TotalSize: proto.Uint64(counter.Count()),
+				Sha256Tar: proto.String(hex.EncodeToString(hasher.Sum(nil))),
 			},
 		},
 	})

@@ -18,16 +18,21 @@ var snapshotsCmd = &cobra.Command{
 	Short: "Snapshots manager",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		echo, http := server.NewHttpServer(server.HttpOptions{
+			Debug: flags.Debug,
+		})
+
 		grpc := server.NewGrpcServer(server.GrpcOptions{
 			Logger:    logger.Named("grpc"),
 			LargeFile: true,
 		})
 
 		registry := cluster.NewMemberlist(cluster.MemberlistOptions{
-			BindHost: flags.Host,
-			BindPort: flags.GossipPort,
-			Join:     flags.MemberlistJoin,
-			Logger:   logger.Named("memberlist"),
+			AdvertiseHost: flags.GossipAdvertise,
+			BindHost:      flags.Host,
+			BindPort:      flags.GossipPort,
+			Join:          flags.MemberlistJoin,
+			Logger:        logger.Named("memberlist"),
 			NodeInfo: &cluster.NodeInfo{
 				ServicePort: flags.Port,
 			},
@@ -36,6 +41,7 @@ var snapshotsCmd = &cobra.Command{
 		manager := snapshots.NewManager(snapshots.ManagerOptions{
 			Logger:             logger.Named("snapshots"),
 			NodeRegistry:       registry,
+			HttpServer:         echo,
 			GrpcServer:         grpc,
 			DatabaseConnection: snapshotsFlags.DatabaseConnection,
 			StoreDirectory:     args[0],
@@ -45,6 +51,7 @@ var snapshotsCmd = &cobra.Command{
 		server.StartServer(server.StartServerOptions{
 			Host:       flags.Host,
 			Port:       flags.Port,
+			HttpServer: http,
 			GrpcServer: grpc,
 			Logger:     logger.Named("server"),
 		})
@@ -54,5 +61,5 @@ var snapshotsCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(snapshotsCmd)
 	snapshotsCmd.PersistentFlags().StringVar(&snapshotsFlags.DatabaseConnection, "database", "", "postgresql connection string")
-	snapshotsCmd.MarkPersistentFlagRequired("database")
+	_ = snapshotsCmd.MarkPersistentFlagRequired("database")
 }
