@@ -42,7 +42,6 @@ class NCCLTensorSender:
                 world_size=world_size,
                 rank=0,
                 group_name=f"nccl_comm_{addr}_{port}",
-                device_id=torch.device(torch.cuda.current_device()),
             )
 
     def send(self, bucket_size):
@@ -85,7 +84,6 @@ class NCCLTensorReceiver:
             world_size=world_size,
             rank=offset + worker.rank,
             group_name=f"nccl_comm_{addr}_{port}",
-            device_id=torch.device("cuda:0"),
         )
 
     async def async_receive(self):

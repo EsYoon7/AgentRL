@@ -82,12 +82,6 @@ class FSDPWorker(AbstractTrainWorker):
 
     def __init__(self, config):
         super().__init__()
-        if "CUDA_VISIBLE_DEVICES" in os.environ:
-            device = os.environ.pop("CUDA_VISIBLE_DEVICES")
-            os.environ["LOCAL_RANK"] = device
-        else:
-            device = os.environ["LOCAL_RANK"]
-        torch.cuda.set_device(f"cuda:{device}")
         self.config = config
 
     def init_distributed(self, addr, port):
