@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"strconv"
 	"strings"
@@ -15,13 +15,16 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/thudm/agentrl/controller/internal/pb"
 	"github.com/thudm/agentrl/controller/internal/pb/snapshots_v1"
 	"github.com/thudm/agentrl/controller/internal/types"
 	"github.com/thudm/agentrl/controller/internal/utils"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -107,10 +110,25 @@ func (s *Server) convertDBRecord(record *DatabaseRecord) *snapshots_v1.Snapshot 
 		snapshot.Step = &record.Step.Int32
 	}
 
+	if len(record.Tags) > 0 {
+		snapshot.Tags = append([]string(nil), record.Tags...)
+	}
+
 	snapshot.Node = proto.String(record.Node)
 	snapshot.CreatedAt = timestamppb.New(record.CreatedAt)
 
 	return snapshot
+}
+
+func (s *Server) loadSnapshot(ctx context.Context, id string) (*DatabaseRecord, error) {
+	record, err := s.manager.Database.GetSnapshot(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "snapshot not found")
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get snapshot: %v", err)
+	}
+	return record, nil
 }
 
 func (s *Server) GetStorePath(_ context.Context, _ *emptypb.Empty) (*snapshots_v1.GetStorePathResponse, error) {
@@ -152,11 +170,12 @@ func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.Creat
 		},
 		Node: s.manager.NodeRegistry.LocalName(),
 	}
+	record.Tags = normalizeTags(request.GetTags())
 
 	if request.ParentId != nil {
 		parentId, err := uuid.Parse(request.GetParentId())
 		if err != nil {
-			return nil, fmt.Errorf("invalid parent_id: %w", err)
+			return nil, status.Errorf(codes.InvalidArgument, "invalid parent_id: %v", err)
 		}
 		record.ParentID = uuid.NullUUID{
 			UUID:  parentId,
@@ -166,7 +185,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.Creat
 
 	id, err := s.manager.Database.CreateSnapshot(ctx, &record)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create snapshot record: %w", err)
+		return nil, status.Errorf(codes.Internal, "failed to create snapshot record: %v", err)
 	}
 
 	path, err := s.manager.Store.CreateTemporary(id, request.GetExpectedSize())
@@ -175,7 +194,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.Creat
 		if err1 != nil {
 			s.logger.Warnf("failed to delete snapshot record after store creation failure: %v", err1)
 		}
-		return nil, fmt.Errorf("failed to create snapshot store: %w", err)
+		return nil, status.Errorf(codes.Internal, "failed to create snapshot store: %v", err)
 	}
 
 	return &snapshots_v1.CreateSnapshotResponse{
@@ -186,12 +205,12 @@ func (s *Server) CreateSnapshot(ctx context.Context, request *snapshots_v1.Creat
 
 func (s *Server) MarkReady(ctx context.Context, request *snapshots_v1.MarkReadyRequest) (*emptypb.Empty, error) {
 	if request.GetId() == "" {
-		return nil, fmt.Errorf("id is required")
+		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 
 	size, err := s.manager.Store.SaveTemporary(request.GetId(), false)
 	if err != nil {
-		return nil, fmt.Errorf("failed to save snapshot: %w", err)
+		return nil, status.Errorf(codes.Internal, "failed to save snapshot: %v", err)
 	}
 
 	if err = s.manager.Database.SetSnapshotSize(ctx, request.GetId(), size); err != nil {
@@ -200,7 +219,7 @@ func (s *Server) MarkReady(ctx context.Context, request *snapshots_v1.MarkReadyR
 		if err1 != nil {
 			s.logger.Warnf("failed to delete snapshot record after database size update failure: %v", err1)
 		}
-		return nil, fmt.Errorf("failed to set snapshot size: %w", err)
+		return nil, status.Errorf(codes.Internal, "failed to set snapshot size: %v", err)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -230,11 +249,12 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 			Valid: request.Step != nil,
 		},
 	}
+	example.Tags = normalizeTags(request.GetTags())
 
 	if request.PageToken != nil {
 		pageToken, err := uuid.Parse(request.GetPageToken())
 		if err != nil {
-			return nil, fmt.Errorf("invalid page_token: %w", err)
+			return nil, status.Errorf(codes.InvalidArgument, "invalid page_token: %v", err)
 		}
 		example.ID = pageToken
 	}
@@ -242,7 +262,7 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 	if request.ParentId != nil {
 		parentId, err := uuid.Parse(request.GetParentId())
 		if err != nil {
-			return nil, fmt.Errorf("invalid parent_id: %w", err)
+			return nil, status.Errorf(codes.InvalidArgument, "invalid parent_id: %v", err)
 		}
 		example.ParentID = uuid.NullUUID{
 			UUID:  parentId,
@@ -250,9 +270,14 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 		}
 	}
 
-	res, err := s.manager.Database.ListSnapshots(ctx, &example, int(request.GetPageSize()))
+	pageSize := int(request.GetPageSize())
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
+	res, err := s.manager.Database.ListSnapshots(ctx, &example, pageSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list snapshots: %w", err)
+		return nil, status.Errorf(codes.Internal, "failed to list snapshots: %v", err)
 	}
 
 	resp := &snapshots_v1.ListSnapshotsResponse{
@@ -262,7 +287,7 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 		resp.Snapshots[i] = s.convertDBRecord(record)
 	}
 	resp.PreviousPageToken = request.PageToken
-	if len(res) > 0 && len(res) == int(request.GetPageSize()) {
+	if len(res) > 0 && len(res) == pageSize {
 		resp.NextPageToken = proto.String(res[len(res)-1].ID.String())
 	}
 
@@ -270,9 +295,13 @@ func (s *Server) ListSnapshots(ctx context.Context, request *snapshots_v1.ListSn
 }
 
 func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnapshotRequest) (*snapshots_v1.GetSnapshotResponse, error) {
-	record, err := s.manager.Database.GetSnapshot(ctx, request.GetId())
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+
+	record, err := s.loadSnapshot(ctx, request.GetId())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get snapshot: %w", err)
+		return nil, err
 	}
 
 	resp := &snapshots_v1.GetSnapshotResponse{
@@ -284,12 +313,12 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 		if path == "" {
 			node := record.Node
 			if node == "" || node == s.manager.NodeRegistry.LocalName() {
-				return nil, fmt.Errorf("snapshot data not found on local node")
+				return nil, status.Error(codes.NotFound, "snapshot data not found on local node")
 			}
 
 			info, ok := s.manager.NodeRegistry.Get(node)
 			if !ok {
-				return nil, fmt.Errorf("node %s not found in registry", node)
+				return nil, status.Errorf(codes.NotFound, "node %s not found in registry", node)
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -298,7 +327,7 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 			addr := net.JoinHostPort(info.Address, strconv.Itoa(int(info.ServicePort)))
 			conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
-				return nil, fmt.Errorf("failed to connect to node %s at %s: %w", node, addr, err)
+				return nil, status.Errorf(codes.Unavailable, "failed to connect to node %s at %s: %v", node, addr, err)
 			}
 			defer conn.Close()
 
@@ -307,13 +336,13 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 				Id: request.Id,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("failed to start archive stream from node %s at %s: %w", node, addr, err)
+				return nil, status.Errorf(codes.Unavailable, "failed to start archive stream from node %s at %s: %v", node, addr, err)
 			}
 
 			// after connecting to the remote node, create a temporary directory for storing the snapshot
 			path, err = s.manager.Store.CreateTemporary(record.ID.String(), uint64(record.Size.Int64))
 			if err != nil {
-				return nil, fmt.Errorf("failed to create temporary store for snapshot: %w", err)
+				return nil, status.Errorf(codes.Internal, "failed to create temporary store for snapshot: %v", err)
 			}
 
 			pr, pw := io.Pipe()
@@ -334,7 +363,7 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 				msg, err := stream.Recv()
 				if err == io.EOF {
 					_ = pw.Close()
-					finalErr = fmt.Errorf("stream ended without EOF metadata")
+					finalErr = status.Error(codes.DataLoss, "stream ended without EOF metadata")
 					break
 				}
 				if err != nil {
@@ -363,7 +392,7 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 					break
 
 				default:
-					err = fmt.Errorf("unknown payload in stream")
+					err = status.Error(codes.Internal, "unknown payload in stream")
 					_ = pw.CloseWithError(err)
 					finalErr = err
 					break
@@ -378,18 +407,18 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 				finalErr = <-errCh
 			}
 			if finalErr == nil && eof == nil {
-				finalErr = fmt.Errorf("missing EOF metadata from server")
+				finalErr = status.Error(codes.DataLoss, "missing EOF metadata from server")
 			}
 			if finalErr == nil {
 				sumHex := hex.EncodeToString(hasher.Sum(nil))
 				if sumHex != eof.GetSha256Tar() {
-					finalErr = fmt.Errorf("sha256 mismatch: got %s, expected %s", sumHex, eof.GetSha256Tar())
+					finalErr = status.Errorf(codes.DataLoss, "sha256 mismatch: got %s, expected %s", sumHex, eof.GetSha256Tar())
 				}
 			}
 			if finalErr == nil {
 				total := counter.Count()
 				if total != eof.GetTotalSize() {
-					finalErr = fmt.Errorf("size mismatch: got %d, expected %d", total, eof.GetTotalSize())
+					finalErr = status.Errorf(codes.DataLoss, "size mismatch: got %d, expected %d", total, eof.GetTotalSize())
 				}
 			}
 
@@ -411,9 +440,60 @@ func (s *Server) GetSnapshot(ctx context.Context, request *snapshots_v1.GetSnaps
 	return resp, nil
 }
 
+func (s *Server) AddSnapshotTags(ctx context.Context, request *snapshots_v1.AddSnapshotTagsRequest) (*snapshots_v1.Snapshot, error) {
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	tags := normalizeTags(request.GetTags())
+	if len(tags) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "tags are required")
+	}
+	if err := s.manager.Database.AddSnapshotTags(ctx, request.GetId(), tags); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to add tags: %v", err)
+	}
+	record, err := s.loadSnapshot(ctx, request.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return s.convertDBRecord(record), nil
+}
+
+func (s *Server) RemoveSnapshotTags(ctx context.Context, request *snapshots_v1.RemoveSnapshotTagsRequest) (*snapshots_v1.Snapshot, error) {
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	tags := normalizeTags(request.GetTags())
+	if len(tags) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "tags are required")
+	}
+	if err := s.manager.Database.RemoveSnapshotTags(ctx, request.GetId(), tags); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to remove tags: %v", err)
+	}
+	record, err := s.loadSnapshot(ctx, request.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return s.convertDBRecord(record), nil
+}
+
+func (s *Server) SetSnapshotTags(ctx context.Context, request *snapshots_v1.SetSnapshotTagsRequest) (*snapshots_v1.Snapshot, error) {
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	tags := normalizeTags(request.GetTags())
+	if err := s.manager.Database.SetSnapshotTags(ctx, request.GetId(), tags); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to set tags: %v", err)
+	}
+	record, err := s.loadSnapshot(ctx, request.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return s.convertDBRecord(record), nil
+}
+
 func (s *Server) DeleteSnapshot(ctx context.Context, request *snapshots_v1.DeleteSnapshotRequest) (*emptypb.Empty, error) {
 	if request.GetId() == "" {
-		return nil, fmt.Errorf("id is required")
+		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 
 	s.manager.Store.DeleteSnapshot(request.GetId())
@@ -421,7 +501,7 @@ func (s *Server) DeleteSnapshot(ctx context.Context, request *snapshots_v1.Delet
 	if request.GetPropagate() {
 		err := s.manager.Database.DeleteSnapshot(ctx, request.GetId())
 		if err != nil {
-			return nil, fmt.Errorf("failed to delete snapshot record: %w", err)
+			return nil, status.Errorf(codes.Internal, "failed to delete snapshot record: %v", err)
 		}
 
 		for name, info := range s.manager.NodeRegistry.Snapshot() {
@@ -457,7 +537,7 @@ func (s *Server) DeleteSnapshot(ctx context.Context, request *snapshots_v1.Delet
 
 func (s *Server) StreamArchive(request *snapshots_v1.StreamArchiveRequest, stream grpc.ServerStreamingServer[snapshots_v1.ArchiveChunk]) error {
 	if request.GetId() == "" {
-		return fmt.Errorf("id is required")
+		return status.Error(codes.InvalidArgument, "id is required")
 	}
 
 	ctx, cancel := context.WithTimeout(stream.Context(), 10*time.Minute)
@@ -465,7 +545,10 @@ func (s *Server) StreamArchive(request *snapshots_v1.StreamArchiveRequest, strea
 
 	r, err := s.manager.Store.StreamArchive(ctx, request.GetId())
 	if err != nil {
-		return fmt.Errorf("failed to stream archive: %w", err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return status.Error(codes.NotFound, "snapshot data not found")
+		}
+		return status.Errorf(codes.Internal, "failed to stream archive: %v", err)
 	}
 	defer r.Close()
 

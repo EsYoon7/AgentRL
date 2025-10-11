@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Tuple, List, TypedDict
+from typing import Optional, Tuple, List
 
 from google.protobuf import empty_pb2
 from google.protobuf.json_format import MessageToDict
@@ -51,9 +51,10 @@ class SnapshotsClient:
                               session_id: Optional[int] = None,
                               step: Optional[int] = None,
                               parent_id: Optional[str] = None,
-                              expected_size: Optional[int] = None) -> Tuple[str, str]:
+                              expected_size: Optional[int] = None,
+                              tags: Optional[List[str]] = None) -> Tuple[str, str]:
         client = await self._get_client()
-        request = snapshots_v1_pb2.CreateSnapshotRequest(
+        request_kwargs = dict(
             task_type=task_type,
             task_name=task_name,
             task_index=common_pb2.TaskIndex(
@@ -64,8 +65,11 @@ class SnapshotsClient:
             session_id=session_id,
             step=step,
             parent_id=parent_id,
-            expected_size=expected_size
+            expected_size=expected_size,
         )
+        if tags:
+            request_kwargs['tags'] = tags
+        request = snapshots_v1_pb2.CreateSnapshotRequest(**request_kwargs)
         response: snapshots_v1_pb2.CreateSnapshotResponse = await client.CreateSnapshot(request)
         return response.id, response.path
 
@@ -82,9 +86,10 @@ class SnapshotsClient:
                              session_id: Optional[int] = None,
                              step: Optional[int] = None,
                              parent_id: Optional[str] = None,
+                             tags: Optional[List[str]] = None,
                              limit: int = 100) -> List[dict]:
         client = await self._get_client()
-        request = snapshots_v1_pb2.ListSnapshotsRequest(
+        request_kwargs = dict(
             task_type=task_type,
             task_name=task_name,
             task_index=common_pb2.TaskIndex(
@@ -97,6 +102,9 @@ class SnapshotsClient:
             parent_id=parent_id,
             page_size=limit
         )
+        if tags:
+            request_kwargs['tags'] = tags
+        request = snapshots_v1_pb2.ListSnapshotsRequest(**request_kwargs)
         response: snapshots_v1_pb2.ListSnapshotsResponse = await client.ListSnapshots(request)
         return list([MessageToDict(s) for s in response.snapshots])
 
@@ -121,6 +129,24 @@ class SnapshotsClient:
         request = snapshots_v1_pb2.DeleteSnapshotRequest(id=snapshot_id)
         await client.DeleteSnapshot(request)
 
+    async def add_snapshot_tags(self, snapshot_id: str, tags: List[str]) -> dict:
+        client = await self._get_client()
+        request = snapshots_v1_pb2.AddSnapshotTagsRequest(id=snapshot_id, tags=tags)
+        response: snapshots_v1_pb2.Snapshot = await client.AddSnapshotTags(request)
+        return MessageToDict(response)
+
+    async def remove_snapshot_tags(self, snapshot_id: str, tags: List[str]) -> dict:
+        client = await self._get_client()
+        request = snapshots_v1_pb2.RemoveSnapshotTagsRequest(id=snapshot_id, tags=tags)
+        response: snapshots_v1_pb2.Snapshot = await client.RemoveSnapshotTags(request)
+        return MessageToDict(response)
+
+    async def set_snapshot_tags(self, snapshot_id: str, tags: List[str]) -> dict:
+        client = await self._get_client()
+        request = snapshots_v1_pb2.SetSnapshotTagsRequest(id=snapshot_id, tags=tags)
+        response: snapshots_v1_pb2.Snapshot = await client.SetSnapshotTags(request)
+        return MessageToDict(response)
+
     @staticmethod
     def tools() -> List[ChatCompletionToolParam]:
         return [
@@ -136,6 +162,11 @@ class SnapshotsClient:
                                 'type': 'boolean',
                                 'description': 'Whether to continue execution after creating the snapshot',
                                 'default': True
+                            },
+                            'tags': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                                'description': 'List of tags to associate with the created snapshot'
                             }
                         },
                         'additionalProperties': False
@@ -166,6 +197,11 @@ class SnapshotsClient:
                             'parent_id': {
                                 'type': 'string',
                                 'description': 'Filter by parent snapshot ID'
+                            },
+                            'tags': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                                'description': 'Filter by snapshots that contain all specified tags'
                             },
                             'limit': {
                                 'type': 'integer',

@@ -34,6 +34,13 @@ var migration = []string{
 		created_at timestamptz NOT NULL DEFAULT now(),
 		CONSTRAINT fk_parent FOREIGN KEY(parent_id) REFERENCES snapshots(id)
 	)`,
+	`CREATE TABLE IF NOT EXISTS snapshot_tags
+	(
+		snapshot_id uuid NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+		tag         text NOT NULL,
+		created_at  timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (snapshot_id, tag)
+	)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_hierarchy ON snapshots USING GIST (hierarchy)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_type ON snapshots USING HASH (task_type)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_task_name ON snapshots USING HASH (task_name)`,
@@ -42,6 +49,9 @@ var migration = []string{
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_session_id ON snapshots (session_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_step ON snapshots (step)`,
 	`CREATE INDEX IF NOT EXISTS idx_snapshots_node ON snapshots USING HASH (node)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshot_tags_tag ON snapshot_tags USING HASH (tag)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshot_tags_snapshot ON snapshot_tags (snapshot_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_snapshot_tags_tag_snapshot ON snapshot_tags (tag, snapshot_id)`,
 }
 
 var migrationAdvisoryLockID int64 = 660465433444466964
@@ -59,6 +69,7 @@ type DatabaseRecord struct {
 	Node      string
 	Size      sql.NullInt64
 	CreatedAt time.Time
+	Tags      []string
 }
 
 type Database struct {
@@ -112,6 +123,12 @@ func (db *Database) CreateSnapshot(ctx context.Context, record *DatabaseRecord) 
 			}
 		}
 
+		if len(record.Tags) > 0 {
+			if err := insertSnapshotTags(ctx, tx, record.ID, record.Tags); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 
@@ -119,10 +136,6 @@ func (db *Database) CreateSnapshot(ctx context.Context, record *DatabaseRecord) 
 }
 
 func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, pageSize int) ([]*DatabaseRecord, error) {
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-
 	var queryBuilder strings.Builder
 	var args []any
 	var clauses []string
@@ -162,6 +175,18 @@ func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, 
 			args = append(args, example.ID)
 			clauses = append(clauses, fmt.Sprintf("id > $%d", len(args)))
 		}
+	}
+
+	if example != nil && len(example.Tags) > 0 {
+		tagsIdx := len(args) + 1
+		args = append(args, example.Tags)
+		clauses = append(clauses, fmt.Sprintf(`NOT EXISTS (
+			SELECT 1 FROM unnest($%d::text[]) AS filter_tag
+			WHERE NOT EXISTS (
+				SELECT 1 FROM snapshot_tags st
+				WHERE st.snapshot_id = snapshots.id AND st.tag = filter_tag
+			)
+		)`, tagsIdx))
 	}
 
 	clauses = append(clauses, "size IS NOT NULL") // only return completed snapshots
@@ -209,6 +234,10 @@ func (db *Database) ListSnapshots(ctx context.Context, example *DatabaseRecord, 
 		return nil, err
 	}
 
+	if err := db.populateTags(ctx, records); err != nil {
+		return nil, err
+	}
+
 	return records, nil
 }
 
@@ -233,6 +262,14 @@ func (db *Database) GetSnapshot(ctx context.Context, id string) (*DatabaseRecord
 		&record.CreatedAt,
 	); err != nil {
 		return nil, err
+	}
+
+	tags, err := db.fetchTags(ctx, []uuid.UUID{record.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(tags) > 0 {
+		record.Tags = tags[record.ID]
 	}
 
 	return record, nil
@@ -300,6 +337,122 @@ func (db *Database) migrate() error {
 
 		return err
 	})
+}
+
+func insertSnapshotTags(ctx context.Context, tx pgx.Tx, id uuid.UUID, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	unique := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := unique[tag]; ok {
+			continue
+		}
+		unique[tag] = struct{}{}
+		batch.Queue(`INSERT INTO snapshot_tags (snapshot_id, tag) VALUES ($1, $2) ON CONFLICT (snapshot_id, tag) DO NOTHING`, id, tag)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	results := tx.SendBatch(ctx, batch)
+	for range unique {
+		if _, err := results.Exec(); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			_ = results.Close()
+			return err
+		}
+	}
+	return results.Close()
+}
+
+func (db *Database) AddSnapshotTags(ctx context.Context, id string, tags []string) error {
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id: %w", err)
+	}
+	return db.withTx(ctx, func(tx pgx.Tx) error {
+		return insertSnapshotTags(ctx, tx, uid, tags)
+	})
+}
+
+func (db *Database) RemoveSnapshotTags(ctx context.Context, id string, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	return db.withTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM snapshot_tags WHERE snapshot_id = $1::uuid AND tag = ANY($2::text[])`, id, tags)
+		return err
+	})
+}
+
+func (db *Database) SetSnapshotTags(ctx context.Context, id string, tags []string) error {
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id: %w", err)
+	}
+	return db.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM snapshot_tags WHERE snapshot_id = $1::uuid`, uid); err != nil {
+			return err
+		}
+		return insertSnapshotTags(ctx, tx, uid, tags)
+	})
+}
+
+func (db *Database) fetchTags(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID][]string{}, nil
+	}
+
+	rows, err := db.conn.Query(ctx, `SELECT snapshot_id, tag FROM snapshot_tags WHERE snapshot_id = ANY($1::uuid[]) ORDER BY tag`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID][]string, len(ids))
+	for rows.Next() {
+		var snapshotID uuid.UUID
+		var tag string
+		if err := rows.Scan(&snapshotID, &tag); err != nil {
+			return nil, err
+		}
+		result[snapshotID] = append(result[snapshotID], tag)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (db *Database) populateTags(ctx context.Context, records []*DatabaseRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(records))
+	index := make(map[uuid.UUID]*DatabaseRecord, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+		index[record.ID] = record
+	}
+
+	tags, err := db.fetchTags(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	for id, list := range tags {
+		if record, ok := index[id]; ok {
+			record.Tags = append([]string(nil), list...)
+		}
+	}
+	return nil
 }
 
 func (db *Database) Close() {

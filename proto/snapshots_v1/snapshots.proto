@@ -17,6 +17,7 @@ message Snapshot {
   string env_type = 7;
   int64 session_id = 8;
   int32 step = 9;
+  repeated string tags = 10;
 
   string node = 100;
   google.protobuf.Timestamp created_at = 101;
@@ -31,6 +32,10 @@ service SnapshotsManager {
   rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
   rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (google.protobuf.Empty);
+
+  rpc AddSnapshotTags(AddSnapshotTagsRequest) returns (Snapshot);
+  rpc RemoveSnapshotTags(RemoveSnapshotTagsRequest) returns (Snapshot);
+  rpc SetSnapshotTags(SetSnapshotTagsRequest) returns (Snapshot);
 
   rpc StreamArchive(StreamArchiveRequest) returns (stream ArchiveChunk);
 }
@@ -50,6 +55,7 @@ message CreateSnapshotRequest {
   string parent_id = 5;
   int64 session_id = 6;
   int32 step = 7;
+  repeated string tags = 8;
 
   uint64 expected_size = 100;
 }
@@ -71,6 +77,7 @@ message ListSnapshotsRequest {
   string parent_id = 5;
   int64 session_id = 6;
   int32 step = 7;
+  repeated string tags = 8;
 
   uint32 page_size = 100;
   string page_token = 101;
@@ -95,6 +102,21 @@ message GetSnapshotResponse {
 message DeleteSnapshotRequest {
   string id = 1;
   bool propagate = 2;
+}
+
+message AddSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+message RemoveSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+message SetSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
 }
 
 message StreamArchiveRequest {
