@@ -23,7 +23,7 @@ dependencies = [
   "aiohttp",
   "binpacking",
   "filelock",
-  "flash-attn",
+  "flash-attn>=2.4.3",
   "numpy",
   "Pillow",
   "PyYAML",
@@ -39,7 +39,8 @@ dependencies = [
 [project.optional-dependencies]
 megatron = [
   "megatron-core",
-  "transformer-engine[pytorch]"
+  "transformer-engine[pytorch]",
+  "flash-attn<=2.8.1"
 ]
 
 [project.readme]

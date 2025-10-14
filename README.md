@@ -11,6 +11,8 @@ Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework
 - [Quickstart](#quickstart)
 - [Architectural Overview](#architectural-overview)
 - [Training Overview](#training-overview)
+  - [Installation](#installation)
+  - [Getting Started](#getting-started)
   - [Placement Group](#placement-group)
   - [Workers](#workers)
   - [Data](#data)
@@ -24,8 +26,14 @@ Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework
 
 ## Quickstart
 
-For a minimal example of how to use the environment framework,
+- For a minimal example of how to use the environment framework,
 refer to [`examples/simple-calculator`](examples/simple-calculator).
+
+- For the environment and training data used in our paper,
+see [AgentBench FC](https://github.com/THUDM/AgentBench).
+
+- For reproducing the training results in our paper,
+refer to [`examples/training/agentrl_trainer.py`](examples/training/agentrl_trainer.py).
 
 ## Architectural Overview
 
@@ -33,15 +41,23 @@ refer to [`examples/simple-calculator`](examples/simple-calculator).
 
 This project mainly consists of two parts: the training framework and the environment deployment framework.
 
-For the training framework, see [Training Overview](#training-overview).
+- For the training framework, see [Training Overview](#training-overview).
 The code is available in the [`trainer`](trainer) directory.
 
-For the environment deployment framework, see [Environment Overview](#environment-overview).
+- For the environment deployment framework, see [Environment Overview](#environment-overview).
 The code of the controller and the task worker is available in [`controller`](controller) and [`worker`](worker) respectively.
 
 ## Training Overview
 
 AgentRL training package provide basic workers and components to compose a training routine.
+
+### Installation
+
+```shell
+pip install -e ./trainer
+```
+
+### Getting Started
 
 We take [`async_trainer.py`](examples/training/async_trainer.py) as an example to demonstrate how to compose a fully asynchronous GRPO agentic training pipeline.
 
@@ -187,7 +203,7 @@ There's also sample configs for the example trainer available in [`examples/trai
 
 ## Environment Overview
 
-Building upon [AgentBench](https://github.com/THUDM/AgentBench),
+Building upon [AgentBench](https://github.com/THUDM/AgentBench/tree/v0.2),
 this part mainly consists of the following components:
 
 ### Controller

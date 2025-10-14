@@ -1,7 +1,7 @@
 ### Common dependencies for the training environment
 # May not be up to date, double-check before using
 
-FROM nvcr.io/nvidia/cuda-dl-base:25.03-cuda12.8-devel-ubuntu24.04
+FROM nvcr.io/nvidia/cuda-dl-base:25.06-cuda12.9-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -26,16 +26,19 @@ RUN apt-get update && \
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --upgrade setuptools packaging pybind11
+    uv pip install --system --upgrade setuptools packaging psutil ninja pybind11
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-      --extra-index-url https://download.pytorch.org/whl/cu128  \
-      torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1
+      --extra-index-url https://download.pytorch.org/whl/cu129 \
+      torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 RUN --mount=type=cache,target=/root/.cache/uv \
-    echo "flashinfer-python==0.2.11.post3" > /tmp/overrides.txt && \
+    echo "torch-memory-saver==0.0.9rc2" > /tmp/overrides.txt && \
     uv pip install --system --override /tmp/overrides.txt \
-      sglang[all]==0.4.8.post1 megatron-core transformer-engine[pytorch] \
-      flash-attn accelerate binpacking wandb ray[rllib] tensordict nvitop py-spy && \
+      sglang[all]==0.5.3.post2 \
+      megatron-core transformer-engine[pytorch] flash-attn==2.7.3 \
+      accelerate aiohttp binpacking filelock numpy Pillow \
+      PyYAML ray[rllib] requests tensordict transformers \
+      wandb nvitop py-spy && \
     rm -f /tmp/overrides.txt
 
 ### 3. configure utils
@@ -45,8 +48,15 @@ RUN echo 'set -g default-terminal "tmux-256color"' > /root/.tmux.conf && \
     echo 'set-environment -g LC_ALL "C.UTF-8"' >> /root/.tmux.conf && \
     echo 'set-option -g history-limit 50000' >> /root/.tmux.conf && \
     echo 'set-option -g mouse on' >> /root/.tmux.conf && \
+    echo 'alias pip="uv pip"' >> /root/.bashrc && \
     echo 'alias tt="tmux attach -t"' >> /root/.bashrc && \
     echo 'alias tn="tmux new -s"' >> /root/.bashrc && \
     echo 'alias dp="ls -A | parallel du -sh 2>/dev/null | sort -h"' >> /root/.bashrc && \
     echo 'alias ds="du -sh .[!.]* * 2>/dev/null | sort -h"' >> /root/.bashrc && \
     echo 'alias pd="py-spy dump --pid"' >> /root/.bashrc
+
+### 4. install current agentrl trainer
+COPY . /workspace/agentrl
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-deps \
+      -e /workspace/agentrl/trainer[megatron]

@@ -2,14 +2,23 @@ name: Training Base Image
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the image to build
+        required: true
+        type: choice
+        options:
+          - 25.09-cu130-torch290-sglang053
+          - 25.06-cu129-torch280-sglang053
+          - 25.03-cu128-torch271-sglang048
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
@@ -43,10 +52,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: extra/docker/training-base.Dockerfile
+          file: extra/docker/training-base/${{ inputs.tag }}.Dockerfile
           push: true
-          tags: ${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:25.03-cu128-torch271-sglang048', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:25.03-cu128-torch271-sglang048', steps.repo_slug.outputs.repo_lower) }}
+          tags: ${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:{1}', secrets.DOCKER_USER, inputs.tag) || format('ghcr.io/{0}/training-base:{1}', steps.repo_slug.outputs.repo_lower, inputs.tag) }}
           cache-from: |
-            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }}
+            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:cache-{1}', secrets.DOCKER_USER, inputs.tag) || format('ghcr.io/{0}/training-base:cache-{1}', steps.repo_slug.outputs.repo_lower, inputs.tag) }}
           cache-to: |
-            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:buildcache', secrets.DOCKER_USER) || format('ghcr.io/{0}/training-base:buildcache', steps.repo_slug.outputs.repo_lower) }},mode=max
+            type=registry,ref=${{ github.repository == 'THUDM/AgentRL' && format('{0}/agentrl-training-base:cache-{1}', secrets.DOCKER_USER, inputs.tag) || format('ghcr.io/{0}/training-base:cache-{1}', steps.repo_slug.outputs.repo_lower, inputs.tag) }},mode=max

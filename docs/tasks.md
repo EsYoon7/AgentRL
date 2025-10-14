@@ -15,10 +15,10 @@ We provide first-party integration for the following tasks into the environment 
 
 ### AgentBench FC
 
-We have refactored the original [AgentBench](https://github.com/THUDM/AgentBench),
+We have refactored the original [AgentBench](https://github.com/THUDM/AgentBench/tree/v0.2),
 supporting a function-calling style prompt and containerized deployment.
 
-Available in the [agentbench_fc](https://github.com/THUDM/AgentBench/tree/agentbench_fc) branch of the original repository.
+Available in the [AgentBench](https://github.com/THUDM/AgentBench) repository.
 
 ### MobileRL (Android)
 
