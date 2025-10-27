@@ -273,6 +273,13 @@ def main(config):
             for item, adv_item in zip(data, adv):
                 item.update(adv_item)
 
+            if config.get("task_adv_norm"):
+                by_source = defaultdict(list)
+                for item in data:
+                    by_source[item["data_source"]].append(item)
+                for items in by_source.values():
+                    adv_norm(items)
+
         # ref
         with timer.time("ref"):
             loss_config = config.get("loss", {})
@@ -297,13 +304,6 @@ def main(config):
             grad_norm = ray.get(actor.step())[0]
             train_metrics["grad_norm"] = grad_norm
             append_with_prefix(metrics, "actor/", reduce_dict(train_metrics))
-
-        if config.get("task_adv_norm"):
-            by_source = defaultdict(list)
-            for item in data:
-                by_source[item["data_source"]].append(item)
-            for items in by_source.values():
-                adv_norm(items)
 
         data_metrics = gather_metrics(data)
         append_with_prefix(metrics, "rl/", data_metrics)
