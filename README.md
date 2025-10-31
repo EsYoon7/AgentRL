@@ -243,11 +243,10 @@ To evaluate or perform cross sampling with API models / local models / trained m
 
 ```bash
 python server_agent.py \
-  -m gpt-4 \
+  -m gpt-5 \
   -u https://api.openai.com/v1 \
   -j 32 \
   -c http://localhost:5020/api \
-  -t 0.7 \
   webshop-std
 ```
 
@@ -259,7 +258,6 @@ python server_agent.py \
   -u https://api.openai.com/v1 \
   -j 32 \
   -c http://localhost:5020/api \
-  -t 0.7 \
   -f ./results/os-std-gpt5-0.7-interrupted.jsonl \
   webshop-std
  ```
@@ -268,12 +266,11 @@ Do cross sampling with:
 
 ```bash
 python server_agent.py \
-  -m /path/to/Qwen2.5-14B-Instruct \
-  -m /path/to/Llama3.1-8B-Instruct \
+  -u http://url-of-model1/v1 \
+  -u2 http://url-of-model2/v1 \
   --run-all \
   -j 32 \
   -c http://localhost:5020/api \
-  -t 0.7
   webshop-std
 ```
 
