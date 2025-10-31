@@ -25,7 +25,7 @@ dependencies = [
   "uvicorn",
   "fastapi",
   "urllib3",
-  "openai~=1.0",
+  "openai>=1.0",
   "httpx[socks]",
   "pytz",
   "aiodocker",
@@ -33,11 +33,11 @@ dependencies = [
   "aiohttp_socks",
   "pysocks",
   "grpcio~=1.73",
-  "protobuf~=6.0"
+  "protobuf>=6.0"
 ]
 
 [project.readme]
-text = "See the [README](https://github.com/THUDM/AgentRL/blob/main/README.md) for full docs."
+text = "See the [main README](https://github.com/THUDM/AgentRL/blob/main/README.md#environment-overview) for full docs."
 content-type = "text/markdown"
 
 [project.urls]
@@ -58,5 +58,5 @@ local_scheme = "node-and-date"
 version_file = "src/agentrl/worker/_version.py"
 relative_to = "pyproject.toml"
 tag_regex = "^worker-v?(?P<version>.+)$"
-git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "worker-v*"]
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "worker-v?*"]
 fallback_version = "0.2.0"  # the version that added this mechanism
