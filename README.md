@@ -21,6 +21,8 @@ Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework
   - [Task Worker](#task-worker)
   - [Transport Layer](#transport-layer)
   - [Deployment](#deployment)
+- [Evaluation](#evaluation)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 - [Citation](#citation)
 
@@ -234,6 +236,54 @@ On top of that, we provide a gRPC implementation that allows the controller to c
 ### Deployment
 
 See the details of how to deploy the environment framework in [`docs/deployment.md`](docs/deployment.md).
+
+## Evaluation
+
+To evaluate or perform cross sampling with API models / local models / trained models, use `examples/evaluation/server_agent.py`. example:
+
+```bash
+python server_agent.py \
+  -m gpt-4 \
+  -u https://api.openai.com/v1 \
+  -j 32 \
+  -c http://localhost:5020/api \
+  -t 0.7 \
+  webshop-std
+```
+
+If a evaluation is interrupted for any reason, resume it by adding `--file` option:
+
+```bash
+python server_agent.py \
+  -m gpt-5 \
+  -u https://api.openai.com/v1 \
+  -j 32 \
+  -c http://localhost:5020/api \
+  -t 0.7 \
+  -f ./results/os-std-gpt5-0.7-interrupted.jsonl \
+  webshop-std
+ ```
+
+Do cross sampling with:
+
+```bash
+python server_agent.py \
+  -m /path/to/Qwen2.5-14B-Instruct \
+  -m /path/to/Llama3.1-8B-Instruct \
+  --run-all \
+  -j 32 \
+  -c http://localhost:5020/api \
+  -t 0.7
+  webshop-std
+```
+
+Check out `python server_agent.py --help` for all options.
+
+Use `examples/evaluation/check.py` to get statistics from the evaluation results:
+
+```bash
+python check.py ./results/os-std-gpt5-0.7.jsonl
+```
 
 ## Acknowledgements
 
