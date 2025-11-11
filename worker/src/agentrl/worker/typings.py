@@ -2,6 +2,7 @@ import builtins
 from enum import Enum
 from typing import List, Optional, Union, Any, Dict
 
+from anthropic.types import ToolParam
 from openai.types.chat import ChatCompletionAssistantMessageParam, ChatCompletionMessageParam, ChatCompletionToolParam
 from pydantic import BaseModel, model_validator, RootModel, field_validator
 
@@ -58,7 +59,7 @@ ChatHistoryItem = RootModel[ChatCompletionMessageParam]
 
 ChatHistory = RootModel[List[ChatCompletionMessageParam]]
 
-ToolList = RootModel[Optional[List[ChatCompletionToolParam]]]
+ToolList = RootModel[Optional[List[Union[ChatCompletionToolParam, ToolParam]]]]
 
 
 class RewardHistoryItem(BaseModel):

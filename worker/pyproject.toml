@@ -19,21 +19,22 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
-  "pydantic~=2.0",
-  "pyyaml~=6.0",
-  "aiohttp",
-  "uvicorn",
-  "fastapi",
-  "urllib3",
-  "openai>=1.0",
-  "httpx[socks]",
-  "pytz",
   "aiodocker",
-  "redis[hiredis]",
+  "aiohttp",
   "aiohttp_socks",
-  "pysocks",
+  "anthropic",
+  "fastapi",
   "grpcio~=1.73",
-  "protobuf>=6.0"
+  "httpx[socks]",
+  "openai>=1.0",
+  "protobuf>=6.0",
+  "pydantic~=2.0",
+  "pysocks",
+  "pytz",
+  "pyyaml~=6.0",
+  "redis[hiredis]",
+  "uvicorn",
+  "urllib3"
 ]
 
 [project.readme]
