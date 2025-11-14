@@ -22,6 +22,7 @@ Scaling Agentic Reinforcement Learning with a Multi-Turn, Multi-Task Framework
   - [Transport Layer](#transport-layer)
   - [Deployment](#deployment)
 - [Evaluation](#evaluation)
+  - [`agentrl-eval`](#agentrl-eval)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 - [Citation](#citation)
@@ -280,6 +281,23 @@ Use `examples/evaluation/check.py` to get statistics from the evaluation results
 
 ```bash
 python check.py ./results/os-std-gpt5-0.7.jsonl
+```
+
+### `agentrl-eval`
+
+We are working on an experimental all-new version of the `server_agent.py` script, namely `agentrl-eval`,
+providing a more flexible and powerful interface for evaluating multiple models across multiple tasks.
+
+It is still experimental, but you can try it out by installing the `agentrl-eval` package:
+
+```bash
+pip install -e ./eval
+```
+
+Then you can run evaluations with the `agentrl-eval` command:
+
+```bash
+agentrl-eval --help
 ```
 
 ## Acknowledgements

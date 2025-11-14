@@ -25,6 +25,12 @@ Install dependencies in a Python virtual environment if you haven't already:
 (venv) pip install agentrl-worker
 ```
 
+Or from a local clone:
+
+```shell
+(venv) pip install -e ../../worker
+```
+
 Then:
 
 ```shell
@@ -35,16 +41,21 @@ Keep the worker running in the background.
 
 ### 3. Run Evaluation
 
-Set your OpenAI API key (and optionally a base URL and a model) via environment variables:
+Install the agentrl-eval package if you haven't already:
+
+```shell
+(venv) pip install -e ../../eval[tui]
+```
+
+Set your OpenAI API key (and optionally a base URL) via environment variables:
 
 ```shell
 export OPENAI_API_KEY="your_openai_api_key"
 export OPENAI_BASE_URL="your_openai_api_base_url"  # Optional
-export OPENAI_MODEL="gpt-5-nano-2025-08-07"  # Optional
 ```
 
 Then run the evaluation script:
 
 ```shell
-(venv) python ./eval.py
+(venv) agentrl-eval -m gpt-5-nano-2025-08-07 -n 1 -j 1 -c http://localhost:5020/api simple-calculator
 ```
