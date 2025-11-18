@@ -32,14 +32,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra-index-url https://download.pytorch.org/whl/cu129 \
       torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 RUN --mount=type=cache,target=/root/.cache/uv \
-    echo "torch-memory-saver==0.0.9rc2" > /tmp/overrides.txt && \
-    uv pip install --system --override /tmp/overrides.txt \
-      sglang[all]==0.5.3.post2 \
-      megatron-core transformer-engine[pytorch] flash-attn==2.7.3 \
+    uv pip install --system \
+      sglang[all]==0.5.5 \
+      megatron-core transformer-engine[pytorch] flash-attn==2.8.3 \
       accelerate aiohttp binpacking filelock numpy Pillow \
       PyYAML ray[rllib] requests tensordict transformers \
-      wandb nvitop py-spy && \
-    rm -f /tmp/overrides.txt
+      wandb nvitop py-spy
 
 ### 3. configure utils
 RUN echo 'set -g default-terminal "tmux-256color"' > /root/.tmux.conf && \
