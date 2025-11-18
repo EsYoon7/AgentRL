@@ -15,7 +15,7 @@ def main():
         cli_settings = CliSettingsSource(Settings, root_parser=parser)
         CliApp.run(Settings, cli_settings_source=cli_settings)
 
-    except KeyboardInterrupt, asyncio.CancelledError:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass  # ignore exceptions caused by graceful exit
 
 

@@ -12,7 +12,7 @@ from ..convert import OpenAIChatCompletionInputMessageRecord
 
 if TYPE_CHECKING:
     from ._base import BaseClient
-    from ..utils.tokens import TokenCounter
+    from ..session.tokens import TokenCounter
 
 LOG = logging.getLogger(__name__)
 

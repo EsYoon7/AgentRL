@@ -56,6 +56,7 @@ class Settings(BaseSettings):
         default=None,
         description='API key for the model service',
         validation_alias=AliasChoices(
+            'api_key',
             'anthropic_api_key',
             'openai_api_key'
         )
@@ -64,6 +65,7 @@ class Settings(BaseSettings):
         default=None,
         description='base URL for the model API',
         validation_alias=AliasChoices(
+            'base_url',
             'anthropic_base_url',
             'anthropic_bedrock_base_url',
             'openai_base_url'

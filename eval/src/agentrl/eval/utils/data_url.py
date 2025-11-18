@@ -3,10 +3,17 @@ from __future__ import annotations
 import re
 from base64 import b64decode, b64encode
 from hashlib import sha256
-from mimetypes import guess_extension, guess_file_type
+from mimetypes import guess_extension
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote_to_bytes
+
+try:
+    from mimetypes import guess_file_type
+except ImportError:  # pragma: no cover
+    # python < 3.13 fallback
+    from mimetypes import guess_type as guess_file_type
+
 
 _FILENAME_REGEX = re.compile(r'^\d{3,}\.[A-Za-z0-9._+-]+$')
 _EXT = {

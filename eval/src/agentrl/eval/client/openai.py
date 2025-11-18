@@ -18,7 +18,7 @@ from ..convert import (FunctionDefinition,
 from ..utils import normalize_model_name
 
 if TYPE_CHECKING:
-    from ..utils.tokens import TokenCounter
+    from ..session.tokens import TokenCounter
 
 
 class OpenAIOptions(BaseModel):

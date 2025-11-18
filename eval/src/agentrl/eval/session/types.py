@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from enum import auto, Enum, StrEnum
-from typing import Any, Optional, Self, Sequence, TypeAlias, Union
+from enum import auto, Enum
+from typing import Any, Optional, Sequence, TypeAlias, Union
+
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover
+    # python 3.10 fallback
+    class StrEnum(str, Enum):
+        pass
 
 from pydantic import BaseModel, model_validator
 
@@ -51,7 +58,7 @@ class InteractResponse(BaseModel):
     result: Optional[Any] = None
 
     @model_validator(mode='after')
-    def messages_not_empty(self) -> Self:
+    def messages_not_empty(self):
         if self.finish:
             if not self.status:
                 # enforce default status when finished
