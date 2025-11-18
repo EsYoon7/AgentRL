@@ -8,8 +8,7 @@ on:
         required: true
         type: choice
         options:
-          - 25.09-cu130-torch290-sglang053
-          - 25.06-cu129-torch280-sglang053
+          - 25.06-cu129-torch280-sglang055
           - 25.03-cu128-torch271-sglang048
 
 permissions:
