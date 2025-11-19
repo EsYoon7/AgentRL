@@ -1,6 +1,7 @@
 package types
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -82,4 +83,51 @@ func (s TaskIndex) MarshalJSON() ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("invalid value for TaskIndex")
 	}
+}
+
+type NullTaskIndex struct {
+	TaskIndex TaskIndex
+	Valid     bool
+}
+
+func (s NullTaskIndex) String() string {
+	if !s.Valid {
+		return "NULL"
+	}
+
+	return s.TaskIndex.String()
+}
+
+func (s *NullTaskIndex) Scan(value any) error {
+	if value == nil {
+		s.TaskIndex.Value = nil
+		s.Valid = false
+		return nil
+	}
+
+	switch v := value.(type) {
+	case int64:
+		s.TaskIndex = TaskIndex{Value: int(v)}
+		s.Valid = true
+		return nil
+	case string:
+		// try to parse as int
+		if intValue, err := strconv.Atoi(v); err == nil {
+			s.TaskIndex = TaskIndex{Value: intValue}
+		} else {
+			s.TaskIndex = TaskIndex{Value: v}
+		}
+		s.Valid = true
+		return nil
+	}
+
+	return fmt.Errorf("cannot scan %T into TaskIndex", value)
+}
+
+func (s NullTaskIndex) Value() (driver.Value, error) {
+	if s.Valid {
+		return s.String(), nil
+	}
+
+	return nil, nil
 }

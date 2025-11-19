@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/sasha-s/go-deadlock"
-	"github.com/thudm/agentrl/controller/internal/pb"
+	"github.com/thudm/agentrl/controller/internal/pb/controller_v1"
 	"github.com/thudm/agentrl/controller/internal/types"
 	"github.com/thudm/agentrl/controller/internal/utils"
 	"google.golang.org/grpc"
@@ -80,7 +80,7 @@ func (tm *TaskManager) CreateOrValidateTask(name string, indices []types.TaskInd
 	return task, nil
 }
 
-func (tm *TaskManager) UpdateWorker(name string, address string, capacity int, stream *grpc.BidiStreamingServer[pb.WorkerStreamEnvelope, pb.WorkerStreamEnvelope]) (*Worker, error) {
+func (tm *TaskManager) UpdateWorker(name string, address string, capacity int, stream *grpc.BidiStreamingServer[controller_v1.WorkerStreamEnvelope, controller_v1.WorkerStreamEnvelope]) (*Worker, error) {
 	if len(address) == 0 {
 		return nil, fmt.Errorf("worker address cannot be empty")
 	}

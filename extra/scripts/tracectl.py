@@ -35,6 +35,50 @@ def ensure_clean(path: Path, assume_yes: bool = False):
         else:
             path.unlink()
 
+
+def describe_entry(path: Path) -> str:
+    """Return 'dir', 'zip', 'file', or 'unknown' for the given path."""
+    if path.is_dir():
+        return 'dir'
+    if path.is_file():
+        if path.suffix.lower() == '.zip':
+            return 'zip'
+        return 'file'
+    return 'unknown'
+
+
+def copy_entry(src: Path, output: Path, assume_yes: bool) -> Optional[Path]:
+    """Copy a trace payload to the output directory.
+
+    Returns the destination path (file or directory) if copied, otherwise None.
+    """
+    entry_type = describe_entry(src)
+    dest = output / src.name
+
+    if entry_type == 'dir':
+        ensure_clean(dest, assume_yes=assume_yes)
+        shutil.copytree(src, dest, symlinks=True, ignore_dangling_symlinks=True)
+        return dest
+
+    if entry_type == 'file':
+        ensure_clean(dest, assume_yes=assume_yes)
+        shutil.copy2(src, dest)
+        return dest
+
+    if entry_type == 'zip':
+        ensure_clean(dest, assume_yes=assume_yes)
+        shutil.copy2(src, dest)
+        extract_dir = output / src.stem
+        ensure_clean(extract_dir, assume_yes=assume_yes)
+        log(f'extracting {dest} -> {extract_dir}')
+        shutil.unpack_archive(dest, extract_dir)
+        dest.unlink()
+        return extract_dir
+
+    log(f"unsupported entry type for {src} ({entry_type})")
+    return None
+
+
 def parse_session_ids(input_args: List[str]) -> List[int]:
     result: List[int] = []
     for arg in input_args:
@@ -79,20 +123,13 @@ def process_one(idx_total_root_output_overwrite: Tuple[int, int, Path, Path, boo
         return
     log(f'{label} copying from {path}')
 
-    dest = output / path.name
-    ensure_clean(dest, assume_yes=assume_yes)
-    if path.is_dir():
-        shutil.copytree(path, dest, symlinks=True, ignore_dangling_symlinks=True)
-    elif path.is_file():
-        shutil.copy2(path, dest)
-        if path.suffix == '.zip':
-            log(f'{label} extracting {dest}...')
-            extract_dir = output / path.stem
-            ensure_clean(extract_dir, assume_yes=assume_yes)
-            shutil.unpack_archive(dest, extract_dir)
-            dest.unlink()
+    dest = copy_entry(path, output, assume_yes=assume_yes)
+    if dest is None:
+        log(f'{label} skipped {path}')
+    elif dest.is_dir():
+        log(f'{label} copied directory to {dest}')
     else:
-        log(f'{label} unsupported file type for {path}')
+        log(f'{label} copied file to {dest}')
 
 def guess_default_jobs(n_items: int) -> int:
     # IO-bound: allow higher concurrency, but keep it reasonable.

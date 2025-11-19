@@ -22,7 +22,7 @@ func (controller *Controller) handleGetIndices(c echo.Context) error {
 
 	indices, err := controller.TaskManager.DumpIndices(name)
 	if err != nil {
-		c.Logger().Errorf("failed to get indices: %v", err)
+		controller.Logger.Errorf("failed to get indices: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
@@ -38,7 +38,7 @@ type MarkStaleRequest struct {
 func (controller *Controller) handleMarkStale(c echo.Context) error {
 	var request MarkStaleRequest
 	if err := c.Bind(&request); err != nil {
-		c.Logger().Errorf("failed to bind request: %v", err)
+		controller.Logger.Errorf("failed to bind request: %v", err)
 		return &echo.HTTPError{
 			Internal: err,
 			Message:  "invalid request",
@@ -49,7 +49,7 @@ func (controller *Controller) handleMarkStale(c echo.Context) error {
 	err := controller.TaskManager.MarkWorkerStale(request.Name, request.WorkerId, request.Stale)
 
 	if err != nil {
-		c.Logger().Errorf("failed to mark worker as stale: %v", err)
+		controller.Logger.Errorf("failed to mark worker as stale: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
@@ -71,7 +71,7 @@ type StartSampleResponse struct {
 func (controller *Controller) handleStartSample(c echo.Context) error {
 	var request StartSampleRequest
 	if err := c.Bind(&request); err != nil {
-		c.Logger().Errorf("failed to bind request: %v", err)
+		controller.Logger.Errorf("failed to bind request: %v", err)
 		return &echo.HTTPError{
 			Internal: err,
 			Message:  "invalid request",
@@ -82,7 +82,7 @@ func (controller *Controller) handleStartSample(c echo.Context) error {
 	// dispatch task to an idle worker
 	session, err := controller.TaskManager.DispatchTask(request.Name, request.Index, request.CustomTask)
 	if err != nil {
-		c.Logger().Errorf("failed to dispatch task: %v", err)
+		controller.Logger.Errorf("failed to dispatch task: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	c.Response().Header().Set(SessionIdKey, strconv.Itoa(session.Id))
@@ -95,11 +95,11 @@ func (controller *Controller) handleStartSample(c echo.Context) error {
 		// if error status is 406, the worker is full, we need to sync its status
 		var httpError *echo.HTTPError
 		if session.Worker != nil && errors.As(err, &httpError) && httpError.Code == http.StatusNotAcceptable {
-			c.Logger().Infof("Worker %s#%d is unexpectedly full, syncing...", session.Worker.Name, session.Worker.Id)
+			controller.Logger.Infof("Worker %s#%d is unexpectedly full, syncing...", session.Worker.Name, session.Worker.Id)
 			go session.Worker.Sync()
 		}
 
-		c.Logger().Errorf("Session %d failed to start sample: %v", session.Id, err)
+		controller.Logger.Errorf("Session %d failed to start sample: %v", session.Id, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to start sample")
 	}
 
@@ -124,7 +124,7 @@ type InteractResponse struct {
 func (controller *Controller) handleInteract(c echo.Context) error {
 	var request InteractRequest
 	if err := c.Bind(&request); err != nil {
-		c.Logger().Errorf("failed to bind request: %v", err)
+		controller.Logger.Errorf("failed to bind request: %v", err)
 		return &echo.HTTPError{
 			Internal: err,
 			Message:  "invalid request",
@@ -134,20 +134,20 @@ func (controller *Controller) handleInteract(c echo.Context) error {
 
 	sessionId, err := strconv.Atoi(c.Request().Header.Get(SessionIdKey))
 	if err != nil {
-		c.Logger().Errorf("failed to parse session id: %v", err)
+		controller.Logger.Errorf("failed to parse session id: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid session id")
 	}
 
 	session, exists := controller.SessionManager.GetSession(sessionId)
 	if !exists {
-		c.Logger().Errorf("session %d not found", sessionId)
+		controller.Logger.Errorf("session %d not found", sessionId)
 		return echo.NewHTTPError(http.StatusBadRequest, "session not found")
 	}
 
 	result, err := session.Interact(request.Messages)
 
 	if err != nil {
-		c.Logger().Errorf("failed to interact with session %d: %v", sessionId, err)
+		controller.Logger.Errorf("failed to interact with session %d: %v", sessionId, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to interact with session")
 	}
 
@@ -163,13 +163,13 @@ func (controller *Controller) handleInteract(c echo.Context) error {
 func (controller *Controller) handleCancel(c echo.Context) error {
 	sessionId, err := strconv.Atoi(c.Request().Header.Get(SessionIdKey))
 	if err != nil {
-		c.Logger().Errorf("failed to parse session id: %v", err)
+		controller.Logger.Errorf("failed to parse session id: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid session id")
 	}
 
 	session, exists := controller.SessionManager.GetSession(sessionId)
 	if !exists {
-		c.Logger().Errorf("session %d not found", sessionId)
+		controller.Logger.Errorf("session %d not found", sessionId)
 		return echo.NewHTTPError(http.StatusBadRequest, "session not found")
 	}
 
@@ -199,7 +199,7 @@ func (controller *Controller) handleCancelAll(c echo.Context) error {
 func (controller *Controller) handleCancelNotice(c echo.Context) error {
 	sessionId, err := strconv.Atoi(c.Request().Header.Get(SessionIdKey))
 	if err != nil {
-		c.Logger().Errorf("failed to parse session id: %v", err)
+		controller.Logger.Errorf("failed to parse session id: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid session id")
 	}
 
@@ -231,7 +231,7 @@ type ReceiveHeartbeatRequest struct {
 func (controller *Controller) handleReceiveHeartbeat(c echo.Context) error {
 	var request ReceiveHeartbeatRequest
 	if err := c.Bind(&request); err != nil {
-		c.Logger().Errorf("failed to bind request: %v", err)
+		controller.Logger.Errorf("failed to bind request: %v", err)
 		return &echo.HTTPError{
 			Internal: err,
 			Message:  "invalid request",
@@ -241,13 +241,13 @@ func (controller *Controller) handleReceiveHeartbeat(c echo.Context) error {
 
 	_, err := controller.TaskManager.CreateOrValidateTask(request.Name, request.Indices)
 	if err != nil {
-		c.Logger().Errorf("failed to create or validate task: %v", err)
+		controller.Logger.Errorf("failed to create or validate task: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	_, err = controller.TaskManager.UpdateWorker(request.Name, request.Address, request.Concurrency, nil)
 	if err != nil {
-		c.Logger().Errorf("failed to update worker: %v", err)
+		controller.Logger.Errorf("failed to update worker: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 

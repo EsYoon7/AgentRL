@@ -1,6 +1,6 @@
 edition = "2023";
 
-package agentbench;
+package agentrl;
 option go_package = "github.com/thudm/agentrl/controller/internal/pb;pb";
 
 option features.utf8_validation = NONE;

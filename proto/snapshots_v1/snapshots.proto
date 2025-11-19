@@ -1,0 +1,136 @@
+edition = "2023";
+
+package agentrl;
+option go_package = "github.com/thudm/agentrl/controller/internal/snapshots_v1;snapshots_v1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+message Snapshot {
+  string id = 1;
+  string parent_id = 2;
+  repeated string hierarchy = 3;
+  string task_type = 4;
+  string task_name = 5;
+  TaskIndex task_index = 6;
+  string env_type = 7;
+  int64 session_id = 8;
+  int32 step = 9;
+  repeated string tags = 10;
+
+  string node = 100;
+  google.protobuf.Timestamp created_at = 101;
+}
+
+service SnapshotsManager {
+  rpc GetStorePath(google.protobuf.Empty) returns (GetStorePathResponse);
+
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+  rpc MarkReady(MarkReadyRequest) returns (google.protobuf.Empty);
+
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (google.protobuf.Empty);
+
+  rpc AddSnapshotTags(AddSnapshotTagsRequest) returns (Snapshot);
+  rpc RemoveSnapshotTags(RemoveSnapshotTagsRequest) returns (Snapshot);
+  rpc SetSnapshotTags(SetSnapshotTagsRequest) returns (Snapshot);
+
+  rpc StreamArchive(StreamArchiveRequest) returns (stream ArchiveChunk);
+}
+
+message GetStorePathResponse {
+  string root_path = 1;
+
+  uint64 total_bytes = 11;
+  uint64 free_bytes = 12;
+}
+
+message CreateSnapshotRequest {
+  string task_type = 1;
+  string task_name = 2;
+  TaskIndex task_index = 3;
+  string env_type = 4;
+  string parent_id = 5;
+  int64 session_id = 6;
+  int32 step = 7;
+  repeated string tags = 8;
+
+  uint64 expected_size = 100;
+}
+
+message CreateSnapshotResponse {
+  string id = 1;
+  string path = 2;
+}
+
+message MarkReadyRequest {
+  string id = 1;
+}
+
+message ListSnapshotsRequest {
+  string task_type = 1;
+  string task_name = 2;
+  TaskIndex task_index = 3;
+  string env_type = 4;
+  string parent_id = 5;
+  int64 session_id = 6;
+  int32 step = 7;
+  repeated string tags = 8;
+
+  uint32 page_size = 100;
+  string page_token = 101;
+}
+
+message ListSnapshotsResponse {
+  repeated Snapshot snapshots = 1;
+  string previous_page_token = 2;
+  string next_page_token = 3;
+}
+
+message GetSnapshotRequest {
+  string id = 1;
+  bool require_path = 2;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+  string path = 2;
+}
+
+message DeleteSnapshotRequest {
+  string id = 1;
+  bool propagate = 2;
+}
+
+message AddSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+message RemoveSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+message SetSnapshotTagsRequest {
+  string id = 1;
+  repeated string tags = 2;
+}
+
+message StreamArchiveRequest {
+  string id = 1;
+}
+
+message ArchiveChunk {
+  message EOF {
+    uint64 total_size = 1;
+    string sha256_tar = 2;
+  }
+
+  oneof payload {
+    bytes data = 1;
+    EOF eof = 2;
+  }
+}
