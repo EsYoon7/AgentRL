@@ -49,7 +49,8 @@ class TraceStore:
                   session_id: int,
                   ts: Optional[int] = None,
                   mktemp_dir: Optional[Union[Path, str]] = None,
-                  disable_compression: bool = False) -> TraceWriter:
+                  disable_compression: bool = False,
+                  tag: Optional[str] = None) -> TraceWriter:
         """Create a temporary directory for a new trace and return a writer.
         - `ts`: default now (int milliseconds). Used to place by-time.
         - `mktemp_dir`: if given, use this directory as the temporary trace dir.
@@ -62,6 +63,8 @@ class TraceStore:
 
         # final file basename (extension will be decided at finalize)
         file_base = f'{task_index}-{session_id}-{ts}'
+        if tag:
+            file_base = f'{tag}-{file_base}'
 
         def _finalize(tmp_dir: Path) -> Optional[Path]:
             all_files = [p for p in tmp_dir.rglob('*') if p.is_file()]
