@@ -112,6 +112,9 @@ class OpenAIChatCompletionInputMessageRecord(MessageRecord):
                                 image_url=part['image_url']['url'],
                                 detail=part['image_url'].get('detail', 'auto')
                             ))
+                if role == 'assistant':
+                    for part in parts:
+                        part['type'] = part['type'].replace('input_', 'output_')
                 result.append(EasyInputMessageParam(
                     content=parts,
                     role=role,

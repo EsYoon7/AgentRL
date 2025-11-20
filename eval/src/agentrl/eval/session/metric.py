@@ -20,7 +20,7 @@ class Metric:
         else:
             raise ValueError(f'unsupported metric type: {self.type}')
 
-        if result.status != SampleStatus.COMPLETED:
+        if not result.status.is_completed():
             return value, MetricResult.ERROR
         if value == 1.0:
             return value, MetricResult.SUCCESS

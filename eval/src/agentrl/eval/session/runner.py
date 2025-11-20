@@ -174,6 +174,10 @@ class EvaluationRunner:
         try:
             specs = await self.gather_tasks()
             await self.event_bus.publish(SpecsEvent(items=specs))
+            await self.event_bus.publish(MetricsEvent(
+                metric_type=self.metric.type,
+                items=await store.metrics(self.metric)
+            ))
 
             completed = await store.completed()
             for result in completed.values():

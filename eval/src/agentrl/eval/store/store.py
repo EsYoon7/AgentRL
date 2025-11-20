@@ -84,7 +84,7 @@ class ResultStore:
         async with self._lock:
             df = await (
                 self.results.lazy()
-                .filter(pl.col('status').is_in(SampleStatus.client_errors()).not_())
+                .filter(pl.col('status').is_in(SampleStatus.completed_statuses()))
                 .select([
                     'model', 'run', 'task', 'index',
                     'session_id', 'status',
@@ -185,6 +185,7 @@ class ResultStore:
             metric_values = pl.col(col).drop_nans().drop_nulls()
             run_level = (
                 self.results.lazy()
+                .filter(pl.col('status').is_in(SampleStatus.completed_statuses()))
                 .group_by(['model', 'task', 'run'])
                 .agg([
                     metric_values.count().alias('run_valid'),
@@ -215,6 +216,7 @@ class ResultStore:
                         .otherwise(None)
                         .alias('bon')
                 ])
+                .filter(pl.col('valid') > 0)
                 .collect_async()
             )
 

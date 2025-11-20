@@ -31,6 +31,19 @@ class SampleStatus(StrEnum):
     SERVER_ERROR = 'server error'
     WORKFLOW_ERROR = 'workflow error'
 
+    def is_completed(self) -> bool:
+        return self in self.completed_statuses()
+
+    @staticmethod
+    def completed_statuses() -> set[SampleStatus]:
+        return {
+            SampleStatus.UNKNOWN,
+            SampleStatus.COMPLETED,
+            SampleStatus.VALIDATION_FAILED,
+            SampleStatus.INVALID_ACTION,
+            SampleStatus.TASK_LIMIT_REACHED
+        }
+
     def is_client_error(self) -> bool:
         return self in self.client_errors()
 

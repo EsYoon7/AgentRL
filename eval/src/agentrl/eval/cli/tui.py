@@ -19,7 +19,7 @@ from textual.widgets import (DataTable,
                              Static,
                              TabbedContent,
                              TabPane)
-from textual.widgets.data_table import CellDoesNotExist
+from textual.widgets.data_table import CellDoesNotExist, DuplicateKey
 from textual.widgets.option_list import Option
 from textual._context import NoActiveAppError
 
@@ -215,10 +215,14 @@ class EvalApp(App):
             table.clear()
 
             tasks: list[str] = list(set(item.task for item in e.items))
-            table.add_columns(
+            for label, column_key in [
                 ('Model', 'model'),
                 *[(task, task) for task in tasks]
-            )
+            ]:
+                try:
+                    table.add_column(label, key=column_key)
+                except DuplicateKey:
+                    pass
 
             rows: dict[str, dict[str, str]] = {}
             for item in e.items:
@@ -329,15 +333,15 @@ class EvalApp(App):
             )
             value, metric = e.metric
             if metric == MetricResult.SUCCESS:
-                status_text = Text(f'✔ Completed: {value}', style='bold green3')
+                status_text = Text(f'✔ {e.result.status}: {value}', style='bold green3')
             elif metric == MetricResult.PARTIAL_SUCCESS:
-                status_text = Text(f'≈ Completed: {value}', style='bold dark_orange3')
+                status_text = Text(f'≈ {e.result.status}: {value}', style='bold dark_orange3')
             elif metric == MetricResult.FAILURE:
-                status_text = Text(f'✘ Completed: {value}', style='bold indian_red')
+                status_text = Text(f'✘ {e.result.status}: {value}', style='bold indian_red')
             elif metric == MetricResult.UNKNOWN:
-                status_text = Text("⊙ Completed: {value}", style='bold cyan')
+                status_text = Text(f'⊙ {e.result.status}: {value}', style='bold cyan')
             else:
-                status_text = Text(f'‼ Failed: {e.result.status}', style='bold bright_red')
+                status_text = Text(f'‼ {e.result.status}', style='bold bright_red')
             table.update_cell(
                 e.spec.run_key(),
                 'status',
