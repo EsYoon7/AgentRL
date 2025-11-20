@@ -364,7 +364,7 @@ class EvalApp(App):
                     table.update_cell(
                         key,
                         'status',
-                        Text('‼ Failed: cancelled', style='bold bright_red'),
+                        Text('‼ cancelled', style='bold bright_red'),
                         update_width=True
                     )
             except CellDoesNotExist:

@@ -173,15 +173,12 @@ class EvaluationRunner:
 
         try:
             specs = await self.gather_tasks()
-            await self.event_bus.publish(SpecsEvent(items=specs))
-            await self.event_bus.publish(MetricsEvent(
-                metric_type=self.metric.type,
-                items=await store.metrics(self.metric)
-            ))
+            self.event_bus.publish_defer(SpecsEvent(items=specs))
+            asyncio.create_task(self._push_metrics(store))
 
             completed = await store.completed()
             for result in completed.values():
-                await self.event_bus.publish(SessionCompletedEvent(
+                self.event_bus.publish_defer(SessionCompletedEvent(
                     spec=result.spec(),
                     session_id=result.session_id,
                     result=result,
@@ -192,7 +189,7 @@ class EvaluationRunner:
             [self._specs_queue.put_nowait(spec) for spec in specs if spec.run_key() not in completed]
             await asyncio.gather(*(self._worker(store=store) for _ in range(self.concurrency)))
         finally:
-            await self.event_bus.publish(WorkflowCompletedEvent())
+            self.event_bus.publish_defer(WorkflowCompletedEvent())
             await store.save(force=True)
             self.logger.info('evaluation results:\n%s', await store.metrics(self.metric))
             if self.token_counter is not None:
@@ -213,7 +210,7 @@ class EvaluationRunner:
         async def _handle_started(started_session_id: int):
             nonlocal session_id
             session_id = started_session_id
-            await self.event_bus.publish(SessionStartedEvent(
+            self.event_bus.publish_defer(SessionStartedEvent(
                 spec=spec,
                 session_id=session_id
             ))
@@ -225,7 +222,7 @@ class EvaluationRunner:
             session_started_callback=_handle_started
         )())
 
-        await self.event_bus.publish(SessionCompletedEvent(
+        self.event_bus.publish_defer(SessionCompletedEvent(
             spec=spec,
             session_id=session_id,
             result=result,
@@ -233,7 +230,13 @@ class EvaluationRunner:
         ))
 
         await store.record(result)
-        await self.event_bus.publish(MetricsEvent(
-            metric_type=self.metric.type,
-            items=await store.metrics(self.metric)
-        ))
+        asyncio.create_task(self._push_metrics(store))
+
+    async def _push_metrics(self, store: ResultStore):
+        try:
+            await self.event_bus.publish(MetricsEvent(
+                metric_type=self.metric.type,
+                items=await store.metrics(self.metric)
+            ))
+        except Exception:
+            self.logger.exception('failed to push metrics')

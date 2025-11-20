@@ -46,6 +46,9 @@ class EventBus:
                 if isinstance(result, Exception):
                     self.logger.error('error handling event "%s"', event.type, exc_info=result)
 
+    def publish_defer(self, event: T):
+        asyncio.create_task(self.publish(event))
+
     def publish_sync(self, event: T):
         asyncio.run_coroutine_threadsafe(self.publish(event), asyncio.get_event_loop())
 
