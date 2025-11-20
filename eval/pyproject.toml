@@ -52,7 +52,7 @@ where = ["src"]
 
 [tool.setuptools_scm]
 root = ".."
-version_scheme = "no-guess-dev"
+version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 version_file = "src/agentrl/eval/_version.py"
 tag_regex = "^eval-v?(?P<version>.+)$"
