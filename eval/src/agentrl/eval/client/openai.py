@@ -31,6 +31,8 @@ class OpenAIOptions(BaseModel):
     parallel_tool_calls: Optional[bool] = True
     max_output_tokens: Optional[int] = Field(default=16000, ge=1024)
     max_retries: int = Field(default=2, ge=0)
+    chat_completions: bool = False
+    thinking: bool = True
     insecure: bool = False
 
 
@@ -49,11 +51,12 @@ class OpenAIClient(BaseClient):
         self.parallel_tool_calls = options.parallel_tool_calls
         self.max_output_tokens = options.max_output_tokens
         self.max_retries = options.max_retries
+        self.use_thinking = options.thinking
         self.insecure = options.insecure
         self.token_counter = token_counter
 
         self._client: Optional[AsyncOpenAI] = None
-        self._use_responses = True
+        self._use_responses = not options.chat_completions
 
     async def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -101,6 +104,9 @@ class OpenAIClient(BaseClient):
         model = normalize_model_name(model)
 
         if 'thinking' in model or model.startswith('o') or model.startswith('gpt-5'):
+            # gpt-5.1 supports toggling thinking mode, and is disabled by default
+            if model.startswith('gpt-5.1') and not self.use_thinking:
+                return None
             return Reasoning(
                 effort='medium' if not model.startswith('gpt-5-pro') else 'high',
                 summary='auto' if not model.startswith('computer-use') else 'concise'
@@ -121,11 +127,10 @@ class OpenAIClient(BaseClient):
                 input=MessageRecord.convert_all(messages, 'openai_response_input'),
                 max_output_tokens=self.max_output_tokens,
                 model=model,
-                parallel_tool_calls=self.parallel_tool_calls,
+                parallel_tool_calls=self.parallel_tool_calls if tools else None,
                 prompt_cache_key=cache_key,
                 reasoning=thinking,
                 temperature=self.temperature if not thinking else None,
-                tool_choice='auto',
                 tools=FunctionDefinition.convert_all(tools, 'openai_response'),
                 truncation='auto'
             )
@@ -161,11 +166,10 @@ class OpenAIClient(BaseClient):
             messages=MessageRecord.convert_all(messages, 'openai_chat_completion_input'),
             model=model,
             max_completion_tokens=self.max_output_tokens,
-            parallel_tool_calls=self.parallel_tool_calls,
+            parallel_tool_calls=self.parallel_tool_calls if tools else None,
             prompt_cache_key=cache_key,
             reasoning_effort=thinking.effort if thinking else None,
             temperature=self.temperature if not thinking else None,
-            tool_choice='auto',
             tools=FunctionDefinition.convert_all(tools, 'openai_chat_completion')
         )
 

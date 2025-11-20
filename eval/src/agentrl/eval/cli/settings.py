@@ -80,9 +80,8 @@ class Settings(BaseSettings):
         description='override URL for the model messages API endpoint (for Anthropic clients only)'
     )
     thinking: CliImplicitFlag[bool] = Field(
-        default=False,
-        description='enable thinking mode for the model '
-                    '(for Anthropic clients only, conflicts with temperature)'
+        default=True,
+        description='enable thinking mode for the model if supported (conflicts with temperature)'
     )
     computer_use: CliImplicitFlag[bool] = Field(
         default=False,
@@ -113,6 +112,12 @@ class Settings(BaseSettings):
         default=2,
         description='max times of retries allowed for each API request (0 to disable retries)',
         ge=0
+    )
+    chat_completions: CliImplicitFlag[bool] = Field(
+        default=False,
+        description='use chat completions api only. '
+                    'if not specified, the system will try to use responses api first, then fallback. '
+                    '(for OpenAI clients only)'
     )
     aws_access_key: Optional[SecretStr] = Field(
         default=None,

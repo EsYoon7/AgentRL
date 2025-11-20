@@ -191,7 +191,7 @@ class AnthropicClient(BaseClient):
             tool_choice=ToolChoiceAutoParam(
                 type='auto',
                 disable_parallel_tool_use=self.parallel_tool_calls is not True
-            ),
+            ) if tools else None,
             tools=tools,
             betas=self.betas
         )
