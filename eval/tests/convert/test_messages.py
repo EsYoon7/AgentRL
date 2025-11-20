@@ -152,8 +152,8 @@ def test_chat_input_to_response_assistant_with_tool_calls():
     assert len(response_items) == 3
     assistant_message, first_call, second_call = response_items
     assert assistant_message['role'] == 'assistant'
-    assert assistant_message['content'][0] == {'type': 'input_text', 'text': 'Computation ready'}
-    assert assistant_message['content'][1]['type'] == 'input_image'
+    assert assistant_message['content'][0] == {'type': 'output_text', 'text': 'Computation ready'}
+    assert assistant_message['content'][1]['type'] == 'output_image'
     assert first_call == {
         'type': 'function_call',
         'call_id': 'call-1',
