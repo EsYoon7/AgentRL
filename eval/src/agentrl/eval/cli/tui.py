@@ -214,44 +214,72 @@ class EvalApp(App):
             table = self._metrics_table
             table.clear()
 
-            tasks: list[str] = list(set(item.task for item in e.items))
-            for label, column_key in [
-                ('Model', 'model'),
-                *[(task, task) for task in tasks]
-            ]:
-                try:
-                    table.add_column(label, key=column_key)
-                except DuplicateKey:
-                    pass
+            models: set[str] = set()
+            tasks: set[str] = set()
+            for item in e.items:
+                if item.model not in models:
+                    models.add(item.model)
+                if item.task not in tasks:
+                    tasks.add(item.task)
+
+            if len(models) > 1:
+                for label, column_key in [
+                    ('Model', 'model'),
+                    *[(task, task) for task in tasks]
+                ]:
+                    try:
+                        table.add_column(label, key=column_key)
+                    except DuplicateKey:
+                        pass
+            else:
+                for label, column_key in [
+                    ('Task', 'task'),
+                    *[(model, model) for model in models]
+                ]:
+                    try:
+                        table.add_column(label, key=column_key)
+                    except DuplicateKey:
+                        pass
 
             rows: dict[str, dict[str, str]] = {}
             for item in e.items:
-                if item.model not in rows:
-                    rows[item.model] = {'model': item.model}
-                formatted = f'Valid: {item.valid}, {name}: {item.avg:.3f}'
+                if len(models) > 1:
+                    if item.model not in rows:
+                        rows[item.model] = {'model': item.model}
+                elif item.task not in rows:
+                    rows[item.task] = {'task': item.task}
+                formatted = f'Valid: {item.valid}, {name}: {item.avg * 100:.2f}'
                 if item.std is not None:
-                    formatted += f' ± {item.std:.1f}'
+                    formatted += f' ± {item.std * 100:.2f}'
                 if item.bon is not None:
-                    formatted += f', BoN: {item.bon:.3f}'
-                rows[item.model][item.task] = formatted
+                    formatted += f', BoN: {item.bon * 100:.2f}'
+                if len(models) > 1:
+                    rows[item.model][item.task] = formatted
+                else:
+                    rows[item.task][item.model] = formatted
 
             for row in rows.values():
                 table.add_row(
                     *[row.get(col.value, '-') for col in table.columns],
                     height=1
                 )
-            table.sort('model')
+
+            if len(models) > 1:
+                table.sort('model')
+            else:
+                table.sort('task')
+
             self._tabs.show_tab('tab_metrics')
             return
 
         if len(e.items) == 1:
             # only one metric, display a simple summary on status bar
             item = e.items[0]
-            formatted = f'Valid: {item.valid}, {name}: [bold]{item.avg:.3f}[/bold]'
+            formatted = f'Valid: {item.valid}, {name}: [bold]{item.avg * 100:.2f}[/bold]'
             if item.std is not None:
-                formatted += f' ± {item.std:.1f}'
+                formatted += f' ± {item.std * 100:.2f}'
             if item.bon is not None:
-                formatted += f', BoN: {item.bon:.3f}'
+                formatted += f', BoN: {item.bon * 100:.2f}'
 
             self._result_summary_for_metric = True
             self._result_summary.update(formatted)
