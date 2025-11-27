@@ -59,4 +59,4 @@ RUN echo 'set -g default-terminal "tmux-256color"' > /root/.tmux.conf && \
 COPY . /workspace/agentrl
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --no-deps \
-      -e /workspace/agentrl/trainer[megatron]
+      -e "/workspace/agentrl/trainer[sglang,megatron]"

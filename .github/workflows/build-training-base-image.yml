@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - 25.11-cu130-torch290-vllm0112
           - 25.06-cu129-torch280-sglang055
           - 25.03-cu128-torch271-sglang048
 
