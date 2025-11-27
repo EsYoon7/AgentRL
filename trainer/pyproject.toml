@@ -29,7 +29,6 @@ dependencies = [
   "PyYAML",
   "ray[rllib]",
   "requests",
-  "sglang[all]>=0.4.8",
   "tensordict",
   "torch>=2.6.0",
   "transformers",
@@ -37,6 +36,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+sglang = [
+  "sglang[all]>=0.4.8"
+]
+vllm = [
+  "vllm>=0.11.2"
+]
 megatron = [
   "megatron-core",
   "transformer-engine[pytorch]",

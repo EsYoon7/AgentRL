@@ -1,7 +1,7 @@
 ### Common dependencies for the training environment
 # May not be up to date, double-check before using
 
-FROM nvcr.io/nvidia/cuda-dl-base:25.06-cuda12.9-devel-ubuntu24.04
+FROM nvcr.io/nvidia/cuda-dl-base:25.11-cuda13.0-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -29,12 +29,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --upgrade setuptools packaging psutil ninja pybind11
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-      --extra-index-url https://download.pytorch.org/whl/cu129 \
-      torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
+      --extra-index-url https://download.pytorch.org/whl/cu130 \
+      torch==2.9.0 torchvision==0.24.0 torchaudio==2.9.0
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-      sglang[all]==0.5.5 \
-      megatron-core transformer-engine[pytorch] flash-attn==2.8.3 \
+      --extra-index-url https://download.pytorch.org/whl/cu130 \
+      https://github.com/vllm-project/vllm/releases/download/v0.11.2/vllm-0.11.2+cu130-cp38-abi3-manylinux1_x86_64.whl \
+      https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.4.22/flash_attn-2.8.1+cu130torch2.9-cp312-cp312-linux_x86_64.whl \
+      megatron-core transformer-engine[pytorch] \
       accelerate aiohttp binpacking filelock numpy Pillow \
       PyYAML ray[rllib] requests tensordict transformers \
       wandb nvitop py-spy
@@ -57,4 +59,4 @@ RUN echo 'set -g default-terminal "tmux-256color"' > /root/.tmux.conf && \
 COPY . /workspace/agentrl
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --no-deps \
-      -e "/workspace/agentrl/trainer[sglang,megatron]"
+      -e "/workspace/agentrl/trainer[vllm,megatron]"
