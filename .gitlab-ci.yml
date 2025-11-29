@@ -1,0 +1,362 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+stages:
+  - test
+  - package
+  - docker
+
+variables:
+  DOCKER_HOST: unix:///var/run/docker.sock
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_BUILDKIT: "1"
+  PYPI_PUBLISH_URL: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/pypi"
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+.default-python-package:
+  image: ghcr.io/astral-sh/uv:python3.14-trixie
+  stage: package
+  variables:
+    UV_CACHE_DIR: .uv-cache
+  cache:
+    key: "$CI_JOB_NAME"
+    policy: pull-push
+    paths:
+      - .uv-cache
+      - .venv
+  before_script:
+    - set -eu
+    - uv --version
+
+.default-docker:
+  image: docker:27.3.1
+  stage: docker
+  before_script:
+    - set -eu
+    - apk add --no-cache git
+    - test -n "${DOCKER_REGISTRY:-}" || { echo "DOCKER_REGISTRY is not set"; exit 1; }
+    - test -n "${DOCKER_REPO:-}" || { echo "DOCKER_REPO is not set"; exit 1; }
+    - test -n "${DOCKER_USER:-}" || { echo "DOCKER_USER is not set"; exit 1; }
+    - test -n "${DOCKER_PASSWORD:-}" || { echo "DOCKER_PASSWORD is not set"; exit 1; }
+    - docker info
+    - echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USER" --password-stdin
+    - docker buildx inspect agentrl || docker buildx create --name agentrl --use
+  script: |
+    set -eu
+    sanitize_tag() {
+      echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g' | sed -E 's/^-+|-+$//g'
+    }
+    add_tag() {
+      value="$1"
+      if [ -z "${TAGS:-}" ]; then
+        TAGS="$value"
+      else
+        TAGS="$TAGS $value"
+      fi
+    }
+    TAGS=""
+    if [ -n "${CI_COMMIT_TAG:-}" ]; then
+      case "$CI_COMMIT_TAG" in
+        ${COMPONENT}-*)
+          add_tag "$(sanitize_tag "${CI_COMMIT_TAG#${COMPONENT}-}")"
+          ;;
+        *)
+          add_tag "$(sanitize_tag "$CI_COMMIT_TAG")"
+          ;;
+      esac
+    else
+      add_tag "$(sanitize_tag "$CI_COMMIT_REF_SLUG")"
+      if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+        add_tag "$(sanitize_tag "mr-$CI_MERGE_REQUEST_IID")"
+      fi
+      if [ -n "${CI_COMMIT_BRANCH:-}" ] && [ "${CI_COMMIT_BRANCH}" = "${CI_DEFAULT_BRANCH}" ]; then
+        add_tag "$(sanitize_tag "latest")"
+      fi
+    fi
+    REPO_PATH=$(echo "$DOCKER_REPO" | tr '[:upper:]' '[:lower:]')
+    TARGET_IMAGE="$DOCKER_REGISTRY/$REPO_PATH/$COMPONENT"
+    set -- docker buildx build . --file "$DOCKERFILE" --platform "$DOCKER_PLATFORMS"
+    for tag in $TAGS; do
+      set -- "$@" --tag "$TARGET_IMAGE:$tag"
+    done
+    VERSION_VALUE=""
+    if [ -n "${VERSION:-}" ]; then
+      VERSION_VALUE="$VERSION"
+    elif [ -n "${VERSION_COMMAND:-}" ]; then
+      VERSION_VALUE=$(sh -c "$VERSION_COMMAND" | tr -d '\r\n')
+      if [ -z "$VERSION_VALUE" ]; then
+        echo "VERSION_COMMAND produced empty output" >&2
+        exit 1
+      fi
+    fi
+    if [ -n "$VERSION_VALUE" ]; then
+      set -- "$@" --build-arg "VERSION=$VERSION_VALUE"
+    fi
+    if [ -n "${HTTP_PROXY:-}" ]; then
+      set -- "$@" --build-arg "HTTP_PROXY=$HTTP_PROXY"
+    fi
+    if [ -n "${HTTPS_PROXY:-}" ]; then
+      set -- "$@" --build-arg "HTTPS_PROXY=$HTTPS_PROXY"
+    fi
+    if [ -n "${NO_PROXY:-}" ]; then
+      set -- "$@" --build-arg "NO_PROXY=$NO_PROXY"
+    fi
+    set -- "$@" --push
+    "$@"
+
+.controller-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^controller-/'
+    - changes:
+        - controller/**
+        - proto/**
+        - .gitlab-ci.yml
+    - when: never
+
+.worker-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^worker-/'
+    - changes:
+        - worker/**
+        - proto/**
+        - .gitlab-ci.yml
+    - when: never
+
+.trainer-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^trainer-/'
+    - changes:
+        - trainer/**
+        - .gitlab-ci.yml
+    - when: never
+
+.eval-rules:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^eval-/'
+    - changes:
+        - eval/**
+        - .gitlab-ci.yml
+    - when: never
+
+controller:test:
+  extends:
+    - .controller-rules
+  stage: test
+  image: golang:1.24
+  variables:
+    PROTOC_VERSION: "31.1"
+  cache:
+    key: controller-go
+    policy: pull-push
+    paths:
+      - controller/go/pkg/mod
+      - controller/.cache/go-build
+      - .cache/protoc
+      - .cache/go-tools
+  script:
+    - set -eu
+    - |
+      export GOPATH="$CI_PROJECT_DIR/.cache/go"
+      export GOMODCACHE="$CI_PROJECT_DIR/controller/go/pkg/mod"
+      export GOCACHE="$CI_PROJECT_DIR/controller/.cache/go-build"
+      export GOBIN="$CI_PROJECT_DIR/.cache/go-tools/bin"
+      export PATH="$GOBIN:$PATH"
+      mkdir -p "$GOPATH" "$GOMODCACHE" "$GOCACHE" "$GOBIN"
+    - |
+      apt-get update && \
+      apt-get install -y --no-install-recommends curl unzip && \
+      rm -rf /var/lib/apt/lists/*
+    - |
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64) proto_arch="x86_64" ;;
+        aarch64) proto_arch="aarch_64" ;;
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+      esac
+      os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+      mkdir -p .cache/protoc
+      PROTOC_DIR="$CI_PROJECT_DIR/.cache/protoc/${PROTOC_VERSION}-${os}-${proto_arch}"
+      if [ ! -x "$PROTOC_DIR/bin/protoc" ]; then
+        rm -rf "$PROTOC_DIR"
+        mkdir -p "$PROTOC_DIR"
+        curl -L -o /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${os}-${proto_arch}.zip"
+        unzip -o /tmp/protoc.zip -d "$PROTOC_DIR"
+        rm /tmp/protoc.zip
+      fi
+      export PATH="$PROTOC_DIR/bin:$PATH"
+      export PROTOC_INCLUDE_DIR="$PROTOC_DIR/include"
+      if [ ! -x "$GOBIN/protoc-gen-go" ]; then
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      fi
+      if [ ! -x "$GOBIN/protoc-gen-go-grpc" ]; then
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+      fi
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - cd controller
+    - mkdir -p internal/pb
+    - |
+      find ../proto -type f -name '*.proto' -print0 | \
+        xargs -0 protoc --proto_path="$PROTOC_INCLUDE_DIR" --proto_path=../proto \
+        --go_out=internal/pb --go_opt=paths=source_relative \
+        --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative
+    - |
+      if ! git diff --quiet -- internal/pb; then
+        echo "Protobuf files are not up to date. Please regenerate them (see controller/Dockerfile instructions)." >&2
+        exit 1
+      fi
+    - mkdir -p dashboard/dist
+    - touch dashboard/dist/index.html
+    - go test -json ./... | tee test-report.json
+  artifacts:
+    when: always
+    paths:
+      - controller/test-report.json
+
+worker:package:
+  extends:
+    - .default-python-package
+    - .worker-rules
+  script:
+    - set -eu
+    - uv venv .venv
+    - source .venv/bin/activate
+    - uv pip install -e "./worker[dev]"
+    - |
+      cd worker
+      touch ./test-results.xml
+      set +e
+      source ../.venv/bin/activate
+      if command -v pytest >/dev/null 2>&1; then
+        pytest --junit-xml ./test-results.xml
+        status=$?
+        set -e
+        if [ "$status" -ne 0 ] && [ "$status" -ne 5 ]; then
+          exit "$status"
+        fi
+      else
+        set -e
+        echo "pytest not installed; skipping tests"
+      fi
+      cd ..
+    - uv build worker
+    - |
+      set -eu
+      artifacts=$(find worker/dist -maxdepth 1 -type f -print)
+      if [ -z "$artifacts" ]; then
+        echo "No distribution artifacts found in worker/dist" >&2
+        exit 1
+      fi
+      set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
+        --username gitlab-ci-token --password "$CI_JOB_TOKEN"
+      for artifact in $artifacts; do
+        set -- "$@" "$artifact"
+      done
+      "$@"
+  artifacts:
+    when: always
+    paths:
+      - worker/dist
+      - worker/test-results.xml
+    reports:
+      junit:
+        - worker/test-results.xml
+
+trainer:package:
+  extends:
+    - .default-python-package
+    - .trainer-rules
+  script:
+    - set -eu
+    - uv build trainer
+    - |
+      set -eu
+      artifacts=$(find trainer/dist -maxdepth 1 -type f -print)
+      if [ -z "$artifacts" ]; then
+        echo "No distribution artifacts found in $PWD/dist" >&2
+        exit 1
+      fi
+      set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
+        --username gitlab-ci-token --password "$CI_JOB_TOKEN"
+      for artifact in $artifacts; do
+        set -- "$@" "$artifact"
+      done
+      "$@"
+  artifacts:
+    when: always
+    paths:
+      - trainer/dist
+
+eval:package:
+  extends:
+    - .default-python-package
+    - .eval-rules
+  script:
+    - set -eu
+    - uv venv .venv
+    - source .venv/bin/activate
+    - uv pip install -e "./eval[dev]"
+    - |
+      cd eval
+      touch ./test-results.xml
+      set +e
+      source ../.venv/bin/activate
+      if command -v pytest >/dev/null 2>&1; then
+        pytest --junit-xml ./test-results.xml
+        status=$?
+        set -e
+        if [ "$status" -ne 0 ] && [ "$status" -ne 5 ]; then
+          exit "$status"
+        fi
+      else
+        set -e
+        echo "pytest not installed; skipping tests"
+      fi
+      cd ..
+    - uv build eval
+    - |
+      set -eu
+      artifacts=$(find eval/dist -maxdepth 1 -type f -print)
+      if [ -z "$artifacts" ]; then
+        echo "No distribution artifacts found in eval/dist" >&2
+        exit 1
+      fi
+      set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
+        --username gitlab-ci-token --password "$CI_JOB_TOKEN"
+      for artifact in $artifacts; do
+        set -- "$@" "$artifact"
+      done
+      "$@"
+  artifacts:
+    when: always
+    paths:
+      - eval/dist
+      - eval/test-results.xml
+    reports:
+      junit:
+        - eval/test-results.xml
+
+controller:docker:
+  extends:
+    - .default-docker
+    - .controller-rules
+  needs:
+    - controller:test
+  variables:
+    COMPONENT: controller
+    DOCKERFILE: controller/Dockerfile
+    VERSION_COMMAND: "git describe --tags --dirty --long --always --match 'controller-v*' | sed -E 's/^controller-//'"
+    GIT_DEPTH: "0"
+
+eval:docker:
+  extends:
+    - .default-docker
+    - .eval-rules
+  needs:
+    - eval:package
+  variables:
+    COMPONENT: eval
+    DOCKERFILE: eval/Dockerfile

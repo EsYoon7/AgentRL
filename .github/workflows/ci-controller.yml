@@ -34,9 +34,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    name: Run Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: controller/go.mod
+
+      - name: Run go test
+        run: |
+          set -euo pipefail
+          cd controller
+          go test -json ./... | tee ./test-report.json
+
+      - uses: dorny/test-reporter@v2
+        if: ${{ !cancelled() }}
+        with:
+          name: controller-tests
+          path: controller/test-report.json
+          reporter: golang-json
+          fail-on-error: 'true'
+          fail-on-empty: 'false'
+
   build-docker-image:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    needs:
+      - test
     steps:
       - uses: actions/checkout@v5
 
@@ -81,6 +107,8 @@ jobs:
   build-binaries:
     name: Build Binaries
     runs-on: ubuntu-latest
+    needs:
+      - test
     strategy:
       fail-fast: false
       matrix:
