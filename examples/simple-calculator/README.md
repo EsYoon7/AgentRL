@@ -44,7 +44,7 @@ Keep the worker running in the background.
 Install the agentrl-eval package if you haven't already:
 
 ```shell
-(venv) pip install -e ../../eval[tui]
+(venv) pip install -e "../../eval[tui]"
 ```
 
 Set your OpenAI API key (and optionally a base URL) via environment variables:

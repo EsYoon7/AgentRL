@@ -57,7 +57,7 @@ AgentRL training package provide basic workers and components to compose a train
 ### Installation
 
 ```shell
-pip install -e ./trainer
+pip install -e "./trainer[sglang]"
 ```
 
 ### Getting Started
@@ -291,7 +291,7 @@ providing a more flexible and powerful interface for evaluating multiple models 
 It is still experimental, but you can try it out by installing the `agentrl-eval` package:
 
 ```bash
-pip install -e ./eval
+pip install -e "./eval[tui]"
 ```
 
 Then you can run evaluations with the `agentrl-eval` command:
