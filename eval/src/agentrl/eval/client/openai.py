@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from typing import Literal, Optional, TYPE_CHECKING
+from typing import Literal, Optional, TYPE_CHECKING, Any
 
 from httpx import AsyncClient, Timeout
 from openai import AsyncOpenAI, BadRequestError, InternalServerError
@@ -15,7 +15,7 @@ from ..convert import (FunctionDefinition,
                        MessageRecord,
                        OpenAIChatCompletionOutputMessageRecord,
                        OpenAIResponseOutputMessageRecord)
-from ..utils import normalize_model_name
+from ..utils import normalize_model_name, trim_images
 
 if TYPE_CHECKING:
     from ..session.tokens import TokenCounter
@@ -27,12 +27,15 @@ class OpenAIOptions(BaseModel):
     api_key: Optional[SecretStr] = None
     base_url: Optional[Url] = None
     proxy_url: Optional[Url] = None
+    thinking: bool = True
     temperature: Optional[float] = Field(default=0.8, ge=0.0, le=1.0)
     parallel_tool_calls: Optional[bool] = True
     max_output_tokens: Optional[int] = Field(default=16000, ge=1024)
     max_retries: int = Field(default=2, ge=0)
+    max_images: Optional[int] = Field(default=None, ge=0)
     chat_completions: bool = False
-    thinking: bool = True
+    extra_body: Optional[dict[str, Any]] = None
+    extra_headers: Optional[dict[str, str]] = None
     insecure: bool = False
 
 
@@ -47,11 +50,14 @@ class OpenAIClient(BaseClient):
         self.api_key = options.api_key
         self.base_url = str(options.base_url) if options.base_url is not None else None
         self.proxy_url = str(options.proxy_url) if options.proxy_url is not None else None
+        self.use_thinking = options.thinking
         self.temperature = options.temperature
         self.parallel_tool_calls = options.parallel_tool_calls
         self.max_output_tokens = options.max_output_tokens
         self.max_retries = options.max_retries
-        self.use_thinking = options.thinking
+        self.max_images = options.max_images
+        self.extra_body = options.extra_body
+        self.extra_headers = options.extra_headers
         self.insecure = options.insecure
         self.token_counter = token_counter
 
@@ -122,17 +128,24 @@ class OpenAIClient(BaseClient):
         model = await self.get_model_name()
         thinking = await self._reasoning_params()
 
+        messages = MessageRecord.convert_all(messages, to='openai_response_input')
+        # apply max_images filter if set
+        if self.max_images is not None:
+            messages = trim_images(messages, self.max_images)
+
         try:
             response = await client.responses.create(
-                input=MessageRecord.convert_all(messages, 'openai_response_input'),
+                input=messages,
                 max_output_tokens=self.max_output_tokens,
                 model=model,
                 parallel_tool_calls=self.parallel_tool_calls if tools else None,
                 prompt_cache_key=cache_key,
                 reasoning=thinking,
                 temperature=self.temperature if not thinking else None,
-                tools=FunctionDefinition.convert_all(tools, 'openai_response'),
-                truncation='auto'
+                tools=FunctionDefinition.convert_all(tools, to='openai_response'),
+                truncation='auto',
+                extra_body=self.extra_body,
+                extra_headers=self.extra_headers
             )
         except (BadRequestError, InternalServerError) as e:
             self.logger.warning('OpenAI Responses API error: %s, falling back to Chat Completions API', e)
@@ -162,15 +175,23 @@ class OpenAIClient(BaseClient):
         client = await self._get_client()
         model = await self.get_model_name()
         thinking = await self._reasoning_params()
+
+        messages = MessageRecord.convert_all(messages, to='openai_chat_completion_input')
+        # apply max_images filter if set
+        if self.max_images is not None:
+            messages = trim_images(messages, self.max_images)
+
         response = await client.chat.completions.create(
-            messages=MessageRecord.convert_all(messages, 'openai_chat_completion_input'),
+            messages=messages,
             model=model,
             max_completion_tokens=self.max_output_tokens,
             parallel_tool_calls=self.parallel_tool_calls if tools else None,
             prompt_cache_key=cache_key,
             reasoning_effort=thinking.effort if thinking else None,
             temperature=self.temperature if not thinking else None,
-            tools=FunctionDefinition.convert_all(tools, 'openai_chat_completion')
+            tools=FunctionDefinition.convert_all(tools, to='openai_chat_completion'),
+            extra_body=self.extra_body,
+            extra_headers=self.extra_headers
         )
 
         if self.token_counter and hasattr(response, 'usage') and response.usage:

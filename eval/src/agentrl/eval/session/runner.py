@@ -36,6 +36,7 @@ class EvaluationRunner:
                  output_dir: Path,
                  concurrency: Optional[int] = None,
                  controller: Optional[ControllerClient] = None,
+                 controller_renew: bool = False,
                  cross_sample: bool = False,
                  custom_params: Optional[dict[str, Any]] = None,
                  indices: Optional[set[TaskIndex]] = None,
@@ -43,6 +44,7 @@ class EvaluationRunner:
                  models: Optional[Sequence[BaseClient]] = None,
                  resume: Optional[Path] = None,
                  runs: Optional[int] = None,
+                 start_sample: bool = False,
                  tasks: Optional[set[str]] = None,
                  token_counter: Optional[TokenCounter] = None,
                  view_only: bool = False):
@@ -50,6 +52,7 @@ class EvaluationRunner:
 
         self.concurrency = concurrency
         self.controller = controller
+        self.controller_renew = controller_renew
         self.cross_sample = cross_sample
         self.custom_params = custom_params or {}
         self.event_bus = event_bus
@@ -60,6 +63,7 @@ class EvaluationRunner:
         self.output_dir = output_dir
         self.resume = resume
         self.runs = runs
+        self.start_sample = start_sample
         self.tasks = tasks
         self.token_counter = token_counter
         self.view_only = view_only
@@ -69,6 +73,9 @@ class EvaluationRunner:
         self._specs_queue: Optional[asyncio.Queue[RunSpec]] = None
 
     async def gather_models(self) -> list[str]:
+        if self.start_sample:
+            return ['start-sample']
+
         if not self.models:
             return []
 
@@ -158,6 +165,9 @@ class EvaluationRunner:
         if self.resume:
             # resume path provided, force using it as the result store
             store = result_list.path(self.resume, resume=True)
+        elif self.start_sample:
+            # start-sample only mode, create a new result store
+            store = result_list.create()
         else:
             result_list_items = result_list.list()
             if len(result_list_items) > 0 and self.interactive:
@@ -187,7 +197,19 @@ class EvaluationRunner:
 
             self._specs_queue = asyncio.Queue()
             [self._specs_queue.put_nowait(spec) for spec in specs if spec.run_key() not in completed]
-            await asyncio.gather(*(self._worker(store=store) for _ in range(self.concurrency)))
+
+            worker_tasks = [
+                asyncio.create_task(self._worker(store=store))
+                for _ in range(self.concurrency)
+            ]
+            try:
+                await asyncio.gather(*worker_tasks)
+            except Exception:
+                for task in worker_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*worker_tasks, return_exceptions=True)
+                raise
         finally:
             self.event_bus.publish_defer(WorkflowCompletedEvent())
             await store.save(force=True)
@@ -217,9 +239,11 @@ class EvaluationRunner:
 
         result = await (SampleWorkflow(
             controller=self.controller,
-            models=self._model_clients[spec.model],
+            models=self._model_clients.get(spec.model),
             spec=spec,
-            session_started_callback=_handle_started
+            controller_renew=self.controller_renew,
+            session_started_callback=_handle_started,
+            start_sample=self.start_sample
         )())
 
         self.event_bus.publish_defer(SessionCompletedEvent(
@@ -233,6 +257,9 @@ class EvaluationRunner:
         asyncio.create_task(self._push_metrics(store))
 
     async def _push_metrics(self, store: ResultStore):
+        if self.start_sample:
+            return  # no metrics in start-sample mode
+
         try:
             await self.event_bus.publish(MetricsEvent(
                 metric_type=self.metric.type,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import auto, Enum
 from typing import Any, Optional, Sequence, TypeAlias, Union
 
@@ -111,6 +112,8 @@ class RunResult(BaseModel):
     result: Optional[Any]
     task_trace: Optional[Any]
     raw_trace: Optional[Any]
+    time_start: Optional[datetime]
+    time_end: Optional[datetime]
 
     def spec(self) -> RunSpec:
         return RunSpec(

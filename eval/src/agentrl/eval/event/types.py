@@ -39,7 +39,7 @@ class SessionStartedEvent(BaseModel):
 class SessionCompletedEvent(BaseModel):
     type: Literal['session_completed'] = 'session_completed'
     spec: RunSpec
-    session_id: int
+    session_id: Optional[int]
     result: RunResult
     metric: tuple[Optional[float], MetricResult]
 

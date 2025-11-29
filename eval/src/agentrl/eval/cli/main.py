@@ -98,7 +98,7 @@ async def main(settings: Settings):
             settings_model = settings.model_dump()
             settings_model['model'] = model_name
             model_options.append(settings_model)
-    elif not view_only:
+    elif not view_only and not settings.start_sample:
         model_options.append(settings.model_dump())
     models = await asyncio.gather(*(
         create_client(settings.client, options, token_counter)
@@ -121,6 +121,7 @@ async def main(settings: Settings):
         runner = EvaluationRunner(
             concurrency=settings.concurrency,
             controller=controller,
+            controller_renew=settings.controller_renew,
             cross_sample=settings.cross_sample,
             custom_params=settings.custom_params,
             event_bus=event_bus,
@@ -131,6 +132,7 @@ async def main(settings: Settings):
             output_dir=settings.output,
             resume=settings.resume,
             runs=settings.runs,
+            start_sample=settings.start_sample,
             tasks=settings.tasks,
             token_counter=token_counter,
             view_only=view_only

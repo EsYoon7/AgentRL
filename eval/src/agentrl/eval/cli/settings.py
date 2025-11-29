@@ -113,11 +113,24 @@ class Settings(BaseSettings):
         description='max times of retries allowed for each API request (0 to disable retries)',
         ge=0
     )
+    max_images: Optional[int] = Field(
+        default=None,
+        description='max number of images to include in each model query, omit for unlimited',
+        ge=0
+    )
     chat_completions: CliImplicitFlag[bool] = Field(
         default=False,
         description='use chat completions api only. '
                     'if not specified, the system will try to use responses api first, then fallback. '
                     '(for OpenAI clients only)'
+    )
+    extra_body: Optional[dict[str, Any]] = Field(
+        default=None,
+        description='extra body parameters to include in each model API request'
+    )
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None,
+        description='extra headers to include in each model API request'
     )
     aws_access_key: Optional[SecretStr] = Field(
         default=None,
@@ -168,6 +181,11 @@ class Settings(BaseSettings):
         default=None,
         description='custom parameters to use for all tasks'
     )
+    controller_renew: CliImplicitFlag[bool] = Field(
+        default=False,
+        description='renew controller session periodically to avoid session expiration '
+                    '(only valid when the task supports so, use with caution)'
+    )
 
     # run settings
     runs: int = Field(
@@ -179,6 +197,10 @@ class Settings(BaseSettings):
         default=32,
         description='number of concurrent tasks to run',
         ge=1
+    )
+    start_sample: CliImplicitFlag[bool] = Field(
+        default=False,
+        description='call start_sample only, do not use models'
     )
     cross_sample: CliImplicitFlag[bool] = Field(
         default=False,

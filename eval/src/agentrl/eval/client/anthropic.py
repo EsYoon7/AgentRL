@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from functools import cached_property
-from typing import Literal, Optional, TYPE_CHECKING, Union
+from typing import Literal, Optional, TYPE_CHECKING, Union, Any
 
 from anthropic import AsyncAnthropic, AsyncAnthropicBedrock
 from anthropic.types import (AnthropicBetaParam,
@@ -16,9 +16,10 @@ from pydantic_core import Url
 
 from ._base import BaseClient
 from ..convert import AnthropicMessageOutputMessageRecord, FunctionDefinition, MessageRecord
+from ..utils import trim_images
 
 if TYPE_CHECKING:
-    from ..utils import TokenCounter
+    from ..session.tokens import TokenCounter
 
 
 class AnthropicOptions(BaseModel):
@@ -35,6 +36,9 @@ class AnthropicOptions(BaseModel):
     max_thinking_tokens: int = Field(default=10000, ge=1024)
     max_output_tokens: Optional[int] = Field(default=16000, ge=1024)
     max_retries: int = Field(default=2, ge=0)
+    max_images: Optional[int] = Field(default=None, ge=0)
+    extra_body: Optional[dict[str, Any]] = None
+    extra_headers: Optional[dict[str, str]] = None
     insecure: bool = False
 
 
@@ -100,6 +104,9 @@ class AnthropicClient(BaseClient):
         self.max_thinking_tokens = options.max_thinking_tokens
         self.max_output_tokens = options.max_output_tokens
         self.max_retries = options.max_retries
+        self.max_images = options.max_images
+        self.extra_body = options.extra_body
+        self.extra_headers = options.extra_headers
         self.insecure = options.insecure
         self.token_counter = token_counter
 
@@ -172,9 +179,13 @@ class AnthropicClient(BaseClient):
         for message in messages:
             if message.get('role') == 'assistant':
                 message['cache_control'] = CacheControlEphemeralParam(type='ephemeral')
-        tools = FunctionDefinition.convert_all(tools, 'anthropic_message')
+        tools = FunctionDefinition.convert_all(tools, to='anthropic_message')
         if tools:
             tools[-1]['cache_control'] = CacheControlEphemeralParam(type='ephemeral')
+
+        # apply max_images filter if set
+        if self.max_images is not None:
+            messages = trim_images(messages, self.max_images)
 
         response = await client.beta.messages.create(
             model=model,
@@ -193,7 +204,9 @@ class AnthropicClient(BaseClient):
                 disable_parallel_tool_use=self.parallel_tool_calls is not True
             ) if tools else None,
             tools=tools,
-            betas=self.betas
+            betas=self.betas,
+            extra_body=self.extra_body,
+            extra_headers=self.extra_headers
         )
 
         if self.token_counter and hasattr(response, 'usage') and response.usage:

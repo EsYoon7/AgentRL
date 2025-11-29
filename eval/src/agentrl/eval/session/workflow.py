@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Callable, Coroutine
+from datetime import datetime, UTC
 from typing import Any, Optional, Sequence, TYPE_CHECKING
 
 from httpx import HTTPStatusError
@@ -27,22 +29,28 @@ class SampleWorkflow:
                  controller: ControllerClient,
                  models: Sequence[BaseClient],
                  spec: RunSpec,
-                 session_started_callback: Optional[Callable[[int], Coroutine[Any, Any, None]]] = None):
+                 controller_renew: bool = False,
+                 session_started_callback: Optional[Callable[[int], Coroutine[Any, Any, None]]] = None,
+                 start_sample: bool = False):
         self.logger = logging.getLogger(__name__)
 
         # inputs
         self.controller = controller
-        self.models = models
+        self.models = models  # cross-sample models, pick one at random each turn
         self.spec = spec
+        self.controller_renew = controller_renew
         self.session_started_callback = session_started_callback
+        self.start_sample = start_sample
 
         # internal state
+        self.started_at: Optional[datetime] = None
         self.session_id: Optional[int] = None
         self.messages: list[MessageRecord] = []
         self.tools: list[FunctionDefinition] = []
-        self._current_model = 0
 
     async def __call__(self) -> RunResult:
+        self.started_at = datetime.now(tz=UTC)
+
         try:
             self.logger.debug('starting task="%s" index=%s run=%s',
                              self.spec.task, self.spec.index, self.spec.run)
@@ -92,6 +100,16 @@ class SampleWorkflow:
         self.logger.debug('started session=%d for task="%s" index=%s run=%s',
                           self.session_id, self.spec.task, self.spec.index, self.spec.run)
 
+        if self.start_sample:
+            # for start_sample only mode, we immediately complete the session with a stub response
+            await self.cancel()
+
+            stub_response = response.model_copy()
+            stub_response.finish = True
+            stub_response.status = SampleStatus.COMPLETED
+            stub_response.reward = 1.0
+            return self._server_complete(stub_response)
+
         # interaction loop
         while True:
             # process response from last round (start_sample / interact)
@@ -101,9 +119,15 @@ class SampleWorkflow:
             if response.finish:
                 return self._server_complete(response)
 
-            model = self.models[self._current_model]
-            # cross-sampling: rotate to next model for next turn
-            self._current_model = (self._current_model + 1) % len(self.models)
+            # cross_sampling: randomly pick one model from the list
+            model = self.models[0]
+            if len(self.models) > 1:
+                model = random.choice(self.models)
+
+            # controller_renew: create task to renew session if enabled
+            renew_task: Optional[asyncio.Task] = None
+            if self.controller_renew:
+                renew_task = asyncio.create_task(self._schedule_renew())
 
             # call model client to get model messages
             try:
@@ -116,6 +140,14 @@ class SampleWorkflow:
             except Exception as e:
                 self.logger.debug('failed to query model', exc_info=True)
                 return self._client_complete(SampleStatus.MODEL_ERROR, str(e))
+            finally:
+                # controller_renew: ensure renew task is cancelled before continuing
+                if renew_task is not None:
+                    renew_task.cancel()
+                    try:
+                        await renew_task
+                    except asyncio.CancelledError:
+                        pass
 
             # add model messages to history
             self._log_messages('model messages: %s', messages)
@@ -125,7 +157,7 @@ class SampleWorkflow:
             try:
                 response = await self.controller.interact(
                     session_id=self.session_id,
-                    messages=MessageRecord.convert_all(messages, 'openai_chat_completion_input')
+                    messages=MessageRecord.convert_all(messages, to='openai_chat_completion_input')
                 )
             except Exception as e:
                 self.logger.debug('failed to interact', exc_info=True)
@@ -139,6 +171,12 @@ class SampleWorkflow:
             except Exception:
                 pass  # we don't care about cancellation errors
             self.session_id = None
+
+    async def _schedule_renew(self):
+        assert self.session_id is not None
+        while True:
+            await asyncio.sleep(180)  # renew every 3 minutes
+            await self.controller.renew(self.session_id)
 
     def _log_messages(self, fmt: str, messages: Sequence[MessageRecord]):
         if messages and self.logger.getEffectiveLevel() <= logging.DEBUG:
@@ -207,7 +245,9 @@ class SampleWorkflow:
             metrics=response.metrics,
             result=response.result,
             task_trace=task_trace,
-            raw_trace=MessageRecord.dump_all(self.messages)
+            raw_trace=MessageRecord.dump_all(self.messages),
+            time_start=self.started_at,
+            time_end=datetime.now(tz=UTC)
         )
 
     def _client_complete(self, status: SampleStatus, message: str) -> RunResult:
@@ -223,5 +263,7 @@ class SampleWorkflow:
             metrics=None,
             result=message,
             task_trace=None,
-            raw_trace=MessageRecord.dump_all(self.messages)
+            raw_trace=MessageRecord.dump_all(self.messages),
+            time_start=self.started_at,
+            time_end=datetime.now(tz=UTC)
         )

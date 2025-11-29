@@ -314,7 +314,8 @@ class EvalApp(App):
             ('Index', 'index'),
             ('Run', 'run'),
             ('Session ID', 'session_id'),
-            ('Status', 'status')
+            ('Status', 'status'),
+            ('Time Used', 'time_used')
         )
         for spec in e.items:
             table.add_row(
@@ -324,6 +325,7 @@ class EvalApp(App):
                 spec.run,
                 '',
                 Text('○ Pending', style='grey50'),
+                '',
                 height=1,
                 key=spec.run_key()
             )
@@ -359,6 +361,7 @@ class EvalApp(App):
                 'session_id',
                 e.session_id
             )
+
             value, metric = e.metric
             if metric == MetricResult.SUCCESS:
                 status_text = Text(f'✔ {e.result.status}: {value}', style='bold green3')
@@ -376,6 +379,14 @@ class EvalApp(App):
                 status_text,
                 update_width=True
             )
+
+            if e.result.time_start is not None and e.result.time_end is not None:
+                time_used = e.result.time_end - e.result.time_start
+                table.update_cell(
+                    e.spec.run_key(),
+                    'time_used',
+                    f'{time_used.total_seconds():.1f}s'
+                )
         except CellDoesNotExist:
             pass
 

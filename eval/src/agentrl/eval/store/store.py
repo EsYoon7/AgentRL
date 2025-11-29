@@ -28,7 +28,9 @@ SCHEMA: pl.Schema = pl.Schema({
     'metric_success_rate': pl.Float64(),
     'metrics': pl.String(),
     'task_trace': pl.String(),
-    'raw_trace': pl.String()
+    'raw_trace': pl.String(),
+    'ts_start': pl.Datetime(time_unit='ms', time_zone='UTC'),
+    'ts_end': pl.Datetime(time_unit='ms', time_zone='UTC'),
 })
 
 
@@ -88,7 +90,8 @@ class ResultStore:
                 .select([
                     'model', 'run', 'task', 'index',
                     'session_id', 'status',
-                    'metric_reward', 'metric_score'
+                    'metric_reward', 'metric_score',
+                    'ts_start', 'ts_end'
                 ])
                 .collect_async()
             )
@@ -117,7 +120,9 @@ class ResultStore:
                 metrics=None,
                 result=None,
                 task_trace=None,
-                raw_trace=None
+                raw_trace=None,
+                time_start=row[8] if row[8] is not None else None,
+                time_end=row[9] if row[9] is not None else None,
             )
 
         return result
@@ -170,6 +175,8 @@ class ResultStore:
                     'metrics': [json.dumps(result.metrics, ensure_ascii=False) if result.metrics is not None else None],
                     'task_trace': [str(task_trace_path.relative_to(self.path)) if result.task_trace is not None else None],
                     'raw_trace': [str(raw_trace_path.relative_to(self.path)) if result.raw_trace is not None else None],
+                    'ts_start': [result.time_start],
+                    'ts_end': [result.time_end],
                 }, schema=SCHEMA),
                 on=['model', 'run', 'task', 'index'],
                 how='full',

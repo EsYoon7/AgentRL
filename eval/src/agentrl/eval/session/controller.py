@@ -3,7 +3,8 @@ from __future__ import annotations
 from copy import copy
 from typing import Optional
 
-from httpx import AsyncClient, Timeout
+from httpx import AsyncClient, Response, Timeout
+from openai.types.chat import ChatCompletionAssistantMessageParam
 
 from .types import InteractResponse, TaskIndex
 
@@ -38,7 +39,7 @@ class ControllerClient:
         response = await client.get('get_indices', params={
             'name': task
         })
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     async def start_sample(self,
@@ -60,7 +61,7 @@ class ControllerClient:
             'index': index,
             'custom_task': custom_task
         })
-        response.raise_for_status()
+        self._raise_for_status(response)
         session_id = int(response.headers['session_id'])
         return session_id, InteractResponse.model_validate(response.json())
 
@@ -71,10 +72,22 @@ class ControllerClient:
         }, json={
             'messages': messages
         })
-        response.raise_for_status()
+        self._raise_for_status(response)
         return InteractResponse.model_validate(response.json())
 
-    async def cancel(self, session_id: int):
+    async def renew(self, session_id: int) -> None:
+        """
+        Send a message with empty content to not perform any action while renewing the session.
+        Warning: use on supported tasks only.
+        """
+        await self.interact(session_id, messages=[
+            dict(ChatCompletionAssistantMessageParam(
+                role='assistant',
+                content=''
+            ))
+        ])
+
+    async def cancel(self, session_id: int) -> None:
         client = await self._get_client()
         await client.post(f'cancel', headers={
             'session_id': str(session_id)
@@ -84,3 +97,10 @@ class ControllerClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    @staticmethod
+    def _raise_for_status(response: Response):
+        try:
+            response.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f'controller request to {response.url} failed: {response.text}') from e
