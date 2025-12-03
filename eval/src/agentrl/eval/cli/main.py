@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING
 
-from .. import __name__ as package_name
 from ..client import create_client
 from ..event.bus import EventBus
 from ..event.types import InitializedEvent
@@ -13,6 +11,7 @@ from ..session.controller import ControllerClient
 from ..session.metric import Metric
 from ..session.runner import EvaluationRunner
 from ..session.tokens import TokenCounter
+from ..utils import setup_logging
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -22,15 +21,7 @@ LOG = logging.getLogger(__name__)
 
 async def main(settings: Settings):
     ### setup logging
-    logging.Formatter.converter = time.localtime
-    logging.basicConfig(
-        level=logging.WARNING,
-        format='[%(asctime)s] [%(levelname)s] %(message)s',
-        datefmt='%X'
-    )
-
-    level = logging.DEBUG if settings.verbose else logging.INFO
-    logging.getLogger(package_name).setLevel(level)
+    setup_logging(settings.verbose)
 
     ### initialize event bus
     event_bus = EventBus()
@@ -46,10 +37,7 @@ async def main(settings: Settings):
 
         _init_task = asyncio.create_task(event_bus.wait_for(InitializedEvent))
 
-        app = EvalApp(
-            event_bus=event_bus,
-            log_level=level
-        )
+        app = EvalApp(event_bus=event_bus)
         _app_task = asyncio.create_task(app.run_async())
 
         async def _monitor(main_task: asyncio.Task):

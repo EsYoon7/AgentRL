@@ -27,6 +27,7 @@ SCHEMA: pl.Schema = pl.Schema({
     'metric_score': pl.Float64(),
     'metric_success_rate': pl.Float64(),
     'metrics': pl.String(),
+    'result': pl.String(),
     'task_trace': pl.String(),
     'raw_trace': pl.String(),
     'ts_start': pl.Datetime(time_unit='ms', time_zone='UTC'),
@@ -66,6 +67,9 @@ class ResultStore:
 
         self._lock = asyncio.Lock()
         self._results_last_save = 0.0
+
+    def log_path(self) -> Path:
+        return self.path / 'run.log'
 
     def session_path(self, spec: RunSpec, session_id: int, ts: int) -> Path:
         path = self.path / '-'.join([str(i) for i in [
@@ -172,6 +176,7 @@ class ResultStore:
                     } if result.index is not None else None],
                     'status': [result.status],
                     **{f'metric_{k.value}': [v] for k, v in Metric.all(result).items()},
+                    'result': [json.dumps(result.result, ensure_ascii=False) if result.result is not None else None],
                     'metrics': [json.dumps(result.metrics, ensure_ascii=False) if result.metrics is not None else None],
                     'task_trace': [str(task_trace_path.relative_to(self.path)) if result.task_trace is not None else None],
                     'raw_trace': [str(raw_trace_path.relative_to(self.path)) if result.raw_trace is not None else None],
@@ -230,11 +235,19 @@ class ResultStore:
         return [MetricsListItem.model_validate(m) for m in df.to_dicts()]
 
     def load_sync(self):
-        self.results = pl.read_ndjson(self.results_path, schema=SCHEMA)
+        try:
+            self.results = pl.read_ndjson(self.results_path, schema=SCHEMA)
+        except Exception as e:
+            self.results = pl.read_ndjson(self.results_path, schema=SCHEMA, ignore_errors=True)
+            self.logger.warning(f'error parsing saved results: {e}, ignoring these values')
 
     async def load(self):
         async with self._lock:
-            self.results = await pl.scan_ndjson(self.results_path, schema=SCHEMA).collect_async()
+            try:
+                self.results = await pl.scan_ndjson(self.results_path, schema=SCHEMA).collect_async()
+            except Exception as e:
+                self.results = await pl.scan_ndjson(self.results_path, schema=SCHEMA, ignore_errors=True).collect_async()
+                self.logger.warning(f'error parsing saved results: {e}, ignoring these values')
 
     async def save(self, force: bool = False):
         """

@@ -18,7 +18,7 @@ from ..event.types import (MetricsEvent,
                            WorkflowCompletedEvent,
                            WorkflowStartEvent)
 from ..store.list import ResultList
-from ..utils import normalize_model_name
+from ..utils import normalize_model_name, setup_file_logging
 
 if TYPE_CHECKING:
     from .controller import ControllerClient
@@ -180,6 +180,9 @@ class EvaluationRunner:
                     store = result_list.create()
             else:
                 store = result_list.create()
+
+        # setup file logging in the store
+        setup_file_logging(store.log_path())
 
         try:
             specs = await self.gather_tasks()

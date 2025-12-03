@@ -6,7 +6,6 @@ from typing import Union
 
 from rich import get_console
 from rich.console import Console
-from rich.logging import RichHandler
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -23,7 +22,6 @@ from textual.widgets.data_table import CellDoesNotExist, DuplicateKey
 from textual.widgets.option_list import Option
 from textual._context import NoActiveAppError
 
-from .. import __name__ as package_name
 from ..event.bus import EventBus
 from ..event.types import (InitializedEvent,
                            MetricsEvent,
@@ -35,6 +33,7 @@ from ..event.types import (InitializedEvent,
                            WorkflowCompletedEvent,
                            WorkflowStartEvent)
 from ..session.types import MetricResult, MetricType
+from ..utils import setup_rich_logging
 
 
 class RichLogConsole(Console):
@@ -108,14 +107,10 @@ class EvalApp(App):
     def __init__(self,
                  *,
                  event_bus: EventBus,
-                 log_level: int,
                  **kwargs):
         super().__init__(**kwargs)
         self.logger = logging.getLogger(__name__)
-
         self.event_bus = event_bus
-        self.log_level = log_level
-
         self._result_summary_for_metric = False
 
     def compose(self) -> ComposeResult:
@@ -152,11 +147,7 @@ class EvalApp(App):
     async def on_mount(self):
         # initialize logging console
         console = RichLogConsole(self._log_panel)
-        handler = RichHandler(console=console, level=self.log_level, show_path=False, rich_tracebacks=True)
-        formatter = logging.Formatter('%(message)s', datefmt='%X')
-        handler.setFormatter(formatter)
-        logging.getLogger().handlers = []
-        logging.getLogger(package_name).addHandler(handler)
+        setup_rich_logging(console)
 
         # hide tabs by default
         self._tabs.hide_tab('tab_sessions')
