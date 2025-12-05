@@ -16,7 +16,7 @@ from pydantic_core import Url
 
 from ._base import BaseClient
 from ..convert import AnthropicMessageOutputMessageRecord, FunctionDefinition, MessageRecord
-from ..utils import trim_images
+from ..utils import resize_images, trim_images
 
 if TYPE_CHECKING:
     from ..session.tokens import TokenCounter
@@ -37,6 +37,7 @@ class AnthropicOptions(BaseModel):
     max_output_tokens: Optional[int] = Field(default=16000, ge=1024)
     max_retries: int = Field(default=2, ge=0)
     max_images: Optional[int] = Field(default=None, ge=0)
+    image_size: Optional[str] = None
     extra_body: Optional[dict[str, Any]] = None
     extra_headers: Optional[dict[str, str]] = None
     insecure: bool = False
@@ -105,6 +106,7 @@ class AnthropicClient(BaseClient):
         self.max_output_tokens = options.max_output_tokens
         self.max_retries = options.max_retries
         self.max_images = options.max_images
+        self.image_size = options.image_size
         self.extra_body = options.extra_body
         self.extra_headers = options.extra_headers
         self.insecure = options.insecure
@@ -183,9 +185,11 @@ class AnthropicClient(BaseClient):
         if tools:
             tools[-1]['cache_control'] = CacheControlEphemeralParam(type='ephemeral')
 
-        # apply max_images filter if set
+        # apply message filter if set
         if self.max_images is not None:
             messages = trim_images(messages, self.max_images)
+        if self.image_size is not None:
+            messages = resize_images(messages, self.image_size)
 
         response = await client.beta.messages.create(
             model=model,

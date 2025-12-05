@@ -118,6 +118,12 @@ class Settings(BaseSettings):
         description='max number of images to include in each model query, omit for unlimited',
         ge=0
     )
+    image_size: Optional[str] = Field(
+        default=None,
+        description='if specified, resize images to the specified size before including them in model queries. '
+                    'supports resize based on minimum dimension, maximum dimension, or exact size. '
+                    'examples: 512+ (min dimension), 1024- (max dimension), 800x600 (exact size)'
+    )
     chat_completions: CliImplicitFlag[bool] = Field(
         default=False,
         description='use chat completions api only. '

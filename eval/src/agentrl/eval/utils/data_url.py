@@ -5,7 +5,7 @@ from base64 import b64decode, b64encode
 from hashlib import sha256
 from mimetypes import guess_extension
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from urllib.parse import unquote_to_bytes
 
 try:
@@ -33,6 +33,54 @@ _EXT = {
 
 
 class DataUrlUtil:
+
+    @staticmethod
+    def parse(value: Any) -> Optional[tuple[str, list[str], bytes, bool]]:
+        """Parse a data URL into (mime, params, payload, is_base64)."""
+        if not isinstance(value, str) or not value.startswith('data:'):
+            return None
+        try:
+            header, data_part = value.split(',', 1)
+        except ValueError:
+            return None
+
+        meta = header[5:]
+        mime = 'text/plain'
+        params: list[str] = []
+
+        if meta:
+            parts = [p.strip() for p in meta.split(';') if p.strip()]
+            if parts and '/' in parts[0]:
+                mime = parts[0].lower()
+                params = parts[1:]
+            else:
+                params = parts
+
+        is_base64 = any(p.strip().lower() == 'base64' for p in params)
+        try:
+            payload = b64decode(data_part, validate=False) if is_base64 else unquote_to_bytes(data_part)
+        except Exception:
+            return None
+
+        return mime, params, payload, is_base64
+
+    @staticmethod
+    def build(mime: str, payload: bytes, params: Optional[Iterable[str]] = None) -> str:
+        """Build a base64 data URL preserving non-base64 parameters."""
+        extras = [p for p in (params or []) if p.strip().lower() != 'base64']
+        extras.append('base64')
+        param_section = ';'.join(extras)
+        mime = mime.lower() if mime else ''
+        if mime and param_section:
+            header = f'{mime};{param_section}'
+        elif mime:
+            header = mime
+        elif param_section:
+            header = f';{param_section}'
+        else:
+            header = ''
+        encoded = b64encode(payload).decode('ascii')
+        return f'data:{header},{encoded}'
 
     @staticmethod
     def scrub(x: Any) -> Any:
@@ -67,25 +115,6 @@ class DataUrlUtil:
             ext = _EXT.get(mime) or guess_extension(mime) or '.bin'
             return '.jpg' if ext == '.jpe' else ext
 
-        def parse_data_url(s: str) -> Optional[tuple[str, bytes]]:
-            if not isinstance(s, str) or not s.startswith('data:'):
-                return None
-            try:
-                meta, data = s[5:].split(',', 1)
-            except ValueError:
-                return None
-            mime, is_b64 = 'text/plain', False
-            if meta:
-                parts = meta.split(';')
-                if '/' in parts[0]:
-                    mime, parts = parts[0].lower(), parts[1:]
-                is_b64 = any(p.strip().lower() == 'base64' for p in parts)
-            try:
-                payload = b64decode(data, validate=False) if is_b64 else unquote_to_bytes(data)
-            except Exception:
-                return None
-            return mime, payload
-
         def ensure_file(mime: str, payload: bytes) -> str:
             h = sha256(payload).hexdigest()
             name = seen.get(h)
@@ -100,8 +129,8 @@ class DataUrlUtil:
 
         def walk(o: Any) -> Any:
             if isinstance(o, str):
-                parsed = parse_data_url(o)
-                return ensure_file(*parsed) if parsed else o
+                parsed = DataUrlUtil.parse(o)
+                return ensure_file(parsed[0], parsed[2]) if parsed else o
             if isinstance(o, dict):
                 return {k: walk(v) for k, v in o.items()}
             if isinstance(o, list):
@@ -141,8 +170,7 @@ class DataUrlUtil:
                 if strict: raise KeyError(f'Missing file bytes for "{name}"')
                 return name
             mime = ext_to_mime(name)
-            b64 = b64encode(payload_path.read_bytes()).decode('ascii')
-            return f'data:{mime};base64,{b64}'
+            return DataUrlUtil.build(mime, payload_path.read_bytes())
 
         def walk(o: Any) -> Any:
             if isinstance(o, str) and _FILENAME_REGEX.match(o):

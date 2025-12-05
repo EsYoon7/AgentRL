@@ -15,7 +15,7 @@ from ..convert import (FunctionDefinition,
                        MessageRecord,
                        OpenAIChatCompletionOutputMessageRecord,
                        OpenAIResponseOutputMessageRecord)
-from ..utils import normalize_model_name, trim_images
+from ..utils import normalize_model_name, resize_images, trim_images
 
 if TYPE_CHECKING:
     from ..session.tokens import TokenCounter
@@ -33,6 +33,7 @@ class OpenAIOptions(BaseModel):
     max_output_tokens: Optional[int] = Field(default=16000, ge=1024)
     max_retries: int = Field(default=2, ge=0)
     max_images: Optional[int] = Field(default=None, ge=0)
+    image_size: Optional[str] = None
     chat_completions: bool = False
     extra_body: Optional[dict[str, Any]] = None
     extra_headers: Optional[dict[str, str]] = None
@@ -56,6 +57,7 @@ class OpenAIClient(BaseClient):
         self.max_output_tokens = options.max_output_tokens
         self.max_retries = options.max_retries
         self.max_images = options.max_images
+        self.image_size = options.image_size
         self.extra_body = options.extra_body
         self.extra_headers = options.extra_headers
         self.insecure = options.insecure
@@ -129,9 +131,12 @@ class OpenAIClient(BaseClient):
         thinking = await self._reasoning_params()
 
         messages = MessageRecord.convert_all(messages, to='openai_response_input')
-        # apply max_images filter if set
+
+        # apply message filter if set
         if self.max_images is not None:
             messages = trim_images(messages, self.max_images)
+        if self.image_size is not None:
+            messages = resize_images(messages, self.image_size)
 
         try:
             response = await client.responses.create(
@@ -177,9 +182,12 @@ class OpenAIClient(BaseClient):
         thinking = await self._reasoning_params()
 
         messages = MessageRecord.convert_all(messages, to='openai_chat_completion_input')
-        # apply max_images filter if set
+
+        # apply message filter if set
         if self.max_images is not None:
             messages = trim_images(messages, self.max_images)
+        if self.image_size is not None:
+            messages = resize_images(messages, self.image_size)
 
         response = await client.chat.completions.create(
             messages=messages,
