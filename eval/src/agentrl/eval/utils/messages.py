@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from base64 import b64decode, b64encode
+from copy import deepcopy
 from io import BytesIO
 from typing import Any, Optional, Union
 
@@ -25,8 +26,9 @@ def trim_images(
 ) -> list[Union[ChatCompletionMessageParam, ResponseInputItemParam, BetaMessageParam, MessageParam]]:
     images = 0
 
+    messages_copy = [deepcopy(message) for message in messages]
     messages_reverse = []  # process messages in reverse order
-    for message in reversed(messages):
+    for message in reversed(messages_copy):
         if isinstance(message, dict):
             for content_key in ('content', 'input', 'output'):
                 if not isinstance(message.get(content_key), list):
@@ -185,4 +187,5 @@ def resize_images(
             return {maybe_resize(v) for v in value}
         return value
 
-    return maybe_resize(messages)
+    messages_copy = [deepcopy(message) for message in messages]
+    return maybe_resize(messages_copy)

@@ -187,6 +187,20 @@ def test_resize_images_handles_invalid_base64_data_gracefully():
     assert resized[0]['content'][0]['source']['data'] == source['data']
 
 
+def test_resize_images_does_not_mutate_original_messages():
+    original_url = _make_image_url((10, 5))
+    message = {
+        'role': 'user',
+        'content': [{'type': 'image_url', 'image_url': {'url': original_url}}],
+    }
+
+    resized = resize_images([message], '20+')
+
+    assert resized[0] is not message
+    assert message['content'][0]['image_url']['url'] == original_url
+    assert _get_image_size(resized[0]['content'][0]['image_url']['url']) == (40, 20)
+
+
 @pytest.mark.parametrize('spec', ['', 'foo', '100', '10*10', 'x600', '0+', '-5+', '10x0', '0x10'])
 def test_resize_images_invalid_size_spec(spec):
     with pytest.raises(ValueError):

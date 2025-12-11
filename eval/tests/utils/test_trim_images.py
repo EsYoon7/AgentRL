@@ -92,3 +92,20 @@ def test_trim_images_handles_nested_tool_blocks():
         {'type': 'text', 'text': 'nested desc'},
         {'type': 'image', 'url': 'nested-recent'},
     ]
+
+
+def test_trim_images_does_not_mutate_original_messages():
+    message = {
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'keep'},
+            {'type': 'image', 'url': 'original'},
+        ],
+    }
+
+    result = trim_images([message], max_images=0)
+
+    assert result[0] is not message
+    assert message['content'][1] == {'type': 'image', 'url': 'original'}
+    assert len(result[0]['content']) == 1
+    assert result[0]['content'][0]['type'] == 'text'
