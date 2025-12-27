@@ -17,6 +17,28 @@ class ConfigLoader:
         self._consul_loader = ConsulConfigLoader()
 
     def load_from(self, path, name: Optional[str] = None) -> Dict:
+        # 0. base config
+        config = self._load_file(path)
+
+        # 1. file override
+        override_path = os.environ.get("AGENTRL_CONFIG_OVERRIDE")
+        if override_path:
+            override_config = self._load_file(override_path)
+            config = self.deep_merge(config, override_config)
+
+        # 2. consul override
+        if name is not None:
+            consul_override = self._consul_loader.get_config(name)
+            if consul_override:
+                v = config.get(name) or {}
+                config[name] = self.deep_merge(v, consul_override)
+
+        # 3. environment variable override
+        config = self.deep_override_from_env(config)
+
+        return config
+
+    def _load_file(self, path):
         path = os.path.realpath(path)
         if path in self.loading:
             raise Exception("Circular import detected: {}".format(path))
@@ -38,23 +60,10 @@ class ConfigLoader:
         except Exception as e:
             self.loading.remove(path)
             raise e
+        config = self.parse_default_and_overwrite(deepcopy(config))
         self.loading.remove(path)
         self.loaded[path] = config
-
-        # 1. default and overwrite
-        config = self.parse_default_and_overwrite(deepcopy(config))
-
-        # 2. consul overwrite
-        if name is not None:
-            consul_overwrite = self._consul_loader.get_config(name)
-            if consul_overwrite:
-                v = config.get(name) or {}
-                config[name] = self.deep_merge(v, consul_overwrite)
-
-        # 3. environment variable overwrite
-        config = self.deep_overwrite_from_env(config)
-
-        return config
+        return self.loaded[path]
 
     def parse_imports(self, path, raw_config):
         raw_config = deepcopy(raw_config)
@@ -109,15 +118,9 @@ class ConfigLoader:
                     parsed_v = self.deep_merge(default, parsed_v)
                 ret[k] = parsed_v
             return ret
-        elif isinstance(config, list):
-            ret = []
-            for v in config:
-                ret.append(self.parse_default_and_overwrite(v))
-            return ret
-        else:
-            return config
+        return config
 
-    def deep_overwrite_from_env(self, config, prefix = ''):
+    def deep_override_from_env(self, config, prefix = ''):
         if isinstance(config, dict):
             ret = {}
             for k, v in config.items():
@@ -128,10 +131,10 @@ class ConfigLoader:
                             ret[k] = os.environ[env_key].lower() in ['true', '1', 'yes']
                         else:
                             ret[k] = type(v)(os.environ[env_key])
-                    except:
+                    except Exception:
                         ret[k] = os.environ[env_key]
                 else:
-                    ret[k] = self.deep_overwrite_from_env(v, f'{env_key}_')
+                    ret[k] = self.deep_override_from_env(v, f'{env_key}_')
             return ret
         return config
 
@@ -143,9 +146,5 @@ class ConfigLoader:
                     ret[key] = self.deep_merge(ret[key], new_item[key])
                 else:
                     ret[key] = new_item[key]
-            return ret
-        if isinstance(base_item, list) and isinstance(new_item, list):
-            ret = deepcopy(base_item)
-            ret.extend(new_item)
             return ret
         return new_item

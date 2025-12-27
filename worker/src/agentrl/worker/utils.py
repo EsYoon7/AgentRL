@@ -1,10 +1,13 @@
 import re
+from typing import Union
 
 
-def parse_duration(duration_str: str, default_unit: str = 's') -> int:
+def parse_duration(duration_str: str,
+                   default_unit: str = 's',
+                   return_seconds: bool = False) -> Union[int, float]:
     """
     Parse a duration string (e.g., '5s', '10ms', '2us', or '12' with default unit)
-    and return nanoseconds as an integer.
+    and return nanoseconds (or seconds if return_seconds is set) as an integer.
 
     Supports the units:
       ns (nanoseconds), us (microseconds), µs (microseconds), ms (milliseconds),
@@ -36,4 +39,6 @@ def parse_duration(duration_str: str, default_unit: str = 's') -> int:
     if unit not in multipliers:
         raise ValueError(f"Unknown duration unit: '{unit}'")
     ns = float(value) * multipliers[unit]
+    if return_seconds:
+        return ns / multipliers['s']
     return int(ns)
