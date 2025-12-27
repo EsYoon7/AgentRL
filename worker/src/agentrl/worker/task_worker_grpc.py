@@ -153,25 +153,25 @@ class GrpcTransport:
                 if send_task:
                     try:
                         send_task.cancel()
-                    except:
+                    except Exception:
                         pass
                     send_task = None
                 if recv_task:
                     try:
                         recv_task.cancel()
-                    except:
+                    except Exception:
                         pass
                     recv_task = None
                 if grpc_stream:
                     try:
                         grpc_stream.cancel()
-                    except:
+                    except Exception:
                         pass
                     grpc_stream = None
                 if grpc_channel:
                     try:
                         await grpc_channel.close()
-                    except:
+                    except Exception:
                         pass
                     grpc_channel = None
 

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Tuple
+from uuid import uuid4
+
+import redis.asyncio as redis
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError, TimeoutError, BusyLoadingError
+from redis.retry import Retry
 
 from ._base import StateProvider
-
-try:
-    import redis.asyncio as redis
-except ImportError:
-    redis = None
 
 # only acquire the lock if it is not held by another client
 # if it is held by the same client, renew the lock
@@ -67,12 +68,12 @@ return #keys"""
 
 
 class RedisStateProvider(StateProvider):
-    def __init__(self, connection: dict, prefix: str):
-        if redis is None:
-            raise ImportError("redis client library is not installed")
 
+    def __init__(self, connection: dict, prefix: str, sentinel: Optional[List[Tuple[str, int]]]):
         self._client = None
-        self._client_connection_params = connection
+        self._client_id = str(uuid4())
+        self._client_connection_params = dict(connection)
+        self._sentinel = sentinel
         self.prefix = prefix
         if self.prefix:
             self.prefix += ':'
@@ -80,18 +81,37 @@ class RedisStateProvider(StateProvider):
 
     async def _get_client(self) -> redis.StrictRedis:
         if self._client is None:
-            self._client = redis.StrictRedis(**self._client_connection_params)
+            client_params = dict(self._client_connection_params)
+            client_params.setdefault('socket_keepalive', True)
+            client_params.setdefault('socket_timeout', 5)
+            client_params.setdefault(
+                'retry', Retry(ExponentialBackoff(cap=1, base=0.1), 2)
+            )
+            client_params.setdefault(
+                'retry_on_error', (ConnectionError, TimeoutError, BusyLoadingError)
+            )
+            if self._sentinel is not None:
+                sentinel = redis.sentinel.Sentinel(self._sentinel, socket_timeout=0.1)
+                self._client = sentinel.master_for(
+                    service_name='mymaster',
+                    redis_class=redis.StrictRedis,
+                    **client_params
+                )
+            else:
+                self._client = redis.StrictRedis(**client_params)
         return self._client
 
-    async def acquire_lock(self, lock_name: str, client_id: str, timeout: int = 10) -> bool:
+    async def acquire_lock(self, lock_name: str, client_id: Optional[str] = None, timeout: int = 10) -> bool:
         client = await self._get_client()
         key = self._lock_key(lock_name)
-        return bool(await client.eval(ACQUIRE_LOCK_SCRIPT, 1, key, client_id, str(timeout)))
+        value = client_id if client_id is not None else self._client_id
+        return bool(await client.eval(ACQUIRE_LOCK_SCRIPT, 1, key, value, str(timeout)))
 
-    async def release_lock(self, lock_name: str, client_id: str):
+    async def release_lock(self, lock_name: str, client_id: Optional[str] = None):
         client = await self._get_client()
         key = self._lock_key(lock_name)
-        await client.eval(RELEASE_LOCK_SCRIPT, 1, key, client_id)
+        value = client_id if client_id is not None else self._client_id
+        await client.eval(RELEASE_LOCK_SCRIPT, 1, key, value)
 
     async def allocate_container(self, container_id: str, session_id: str):
         client = await self._get_client()
@@ -144,7 +164,7 @@ class RedisStateProvider(StateProvider):
         client = await self._get_client()
         try:
             return json.loads(await client.get(self._session_key(session_id)))
-        except:
+        except Exception:
             return None
 
     async def renew_session(self, session_id: str):
@@ -154,6 +174,11 @@ class RedisStateProvider(StateProvider):
     async def delete_session(self, session_id: str):
         client = await self._get_client()
         await client.delete(self._session_key(session_id))
+
+    async def close(self):
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     def _lock_key(self, lock_name: str) -> str:
         return f'{self.prefix}lock:{lock_name}'

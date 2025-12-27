@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import List, Optional, Union, TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
+    import kubernetes_asyncio as k8s
+
     from ._base import EnvironmentController
 
 
@@ -63,7 +65,49 @@ class EnvironmentDelegation:
         """
         Hook to perform additional actions after the Docker container is created.
         Only called if the final delegation class directly overrides this method.
-        If health check is configured, only called if the container is healthy.
+        If health check is configured, only called after the container gets healthy.
+        """
+        raise NotImplementedError
+
+    async def create_nomad_job(self, job: dict, subtype: str) -> dict:
+        """
+        If the task supports running as a Nomad job,
+        implement this method to manipulate the job specification.
+
+        To ease management, dependencies can be created as additional tasks in the job.
+
+        :param job: The job specification to create.
+        :param subtype: The subtype of the environment to create.
+        """
+        raise NotImplementedError
+
+    async def post_create_nomad_job(self, subtype: str, environment_id: str, environment_url: str):
+        """
+        Hook to perform additional actions after the Nomad job is created.
+        Only called if the final delegation class directly overrides this method.
+        If health check is configured, only called after the job gets healthy.
+        """
+        raise NotImplementedError
+
+    async def create_k8s_pod(self, spec: k8s.client.V1PodSpec, subtype: str):
+        """
+        If the task supports running as a Kubernetes pod,
+        implement this method to manipulate the pod specification.
+
+        To ease management, dependencies can be created as additional containers in the pod.
+
+        :param spec: The pod specification to create.
+        :param subtype: The subtype of the environment to create.
+        :return: Either the mutated spec, or a tuple of (spec, metadata_overrides) where
+                 metadata_overrides is a dict containing annotations/labels/etc.
+        """
+        raise NotImplementedError
+
+    async def post_create_k8s_pod(self, subtype: str, environment_id: str, environment_url: str):
+        """
+        Hook to perform additional actions after the Kubernetes pod is created.
+        Only called if the final delegation class directly overrides this method.
+        If health check is configured, only called after the pod gets healthy.
         """
         raise NotImplementedError
 
@@ -109,3 +153,10 @@ class EnvironmentDelegation:
         Use 0 for unlimited reuse. Defaults to use `is_exclusive` and `supports_reuse` for compatibility.
         """
         return 1 if self.is_exclusive(subtype) or not self.supports_reuse(subtype) else 0
+
+    def get_max_execution_time(self, subtype: str) -> int:
+        """
+        Get the maximum execution time in seconds for the environment of this subtype, regardless of session activity.
+        Only used when allocation is exclusive. Defaults to 4 hours.
+        """
+        return 4 * 60 * 60

@@ -15,14 +15,16 @@ class LocalStateProvider(StateProvider):
         self.container_uses: Dict[str, int] = {}
         self.sessions: Dict[str, Any] = {}
 
-    async def acquire_lock(self, lock_name: str, client_id: str, timeout: int = 10) -> bool:
+    async def acquire_lock(self, lock_name: str, client_id: Optional[str] = None, timeout: int = 10) -> bool:
         return True
 
-    async def release_lock(self, lock_name: str, client_id: str):
+    async def release_lock(self, lock_name: str, client_id: Optional[str] = None):
         pass
 
     async def allocate_container(self, container_id: str, session_id: str):
-        self.containers[container_id] = {session_id}
+        if container_id not in self.container_uses:
+            self.containers[container_id] = set()
+        self.containers[container_id].add(session_id)
         if container_id not in self.container_uses:
             self.container_uses[container_id] = 0
         self.container_uses[container_id] += 1
@@ -34,11 +36,8 @@ class LocalStateProvider(StateProvider):
         return container_id in self.containers and len(self.containers[container_id]) > 0
 
     async def release_container(self, container_id: str, session_id: str):
-        if container_id in self.containers and self.containers[container_id] == session_id:
+        if container_id in self.containers:
             self.containers[container_id].discard(session_id)
-            self.container_uses[container_id] -= 1
-            if self.container_uses[container_id] <= 0:
-                del self.container_uses[container_id]
 
     async def container_current_uses(self, container_id: str) -> int:
         return len(self.containers.get(container_id, set()))
