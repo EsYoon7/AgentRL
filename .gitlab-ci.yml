@@ -250,6 +250,10 @@ worker:package:
         echo "No distribution artifacts found in worker/dist" >&2
         exit 1
       fi
+      if [ "${CI_PIPELINE_SOURCE:-}" != "push" ] || [ "${CI_COMMIT_BRANCH:-}" != "main" ]; then
+        echo "Skipping publish: not a push to main."
+        exit 0
+      fi
       set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
         --username gitlab-ci-token --password "$CI_JOB_TOKEN"
       for artifact in $artifacts; do
@@ -278,6 +282,10 @@ trainer:package:
       if [ -z "$artifacts" ]; then
         echo "No distribution artifacts found in $PWD/dist" >&2
         exit 1
+      fi
+      if [ "${CI_PIPELINE_SOURCE:-}" != "push" ] || [ "${CI_COMMIT_BRANCH:-}" != "main" ]; then
+        echo "Skipping publish: not a push to main."
+        exit 0
       fi
       set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
         --username gitlab-ci-token --password "$CI_JOB_TOKEN"
@@ -323,6 +331,10 @@ eval:package:
       if [ -z "$artifacts" ]; then
         echo "No distribution artifacts found in eval/dist" >&2
         exit 1
+      fi
+      if [ "${CI_PIPELINE_SOURCE:-}" != "push" ] || [ "${CI_COMMIT_BRANCH:-}" != "main" ]; then
+        echo "Skipping publish: not a push to main."
+        exit 0
       fi
       set -- uv publish --publish-url "$PYPI_PUBLISH_URL" \
         --username gitlab-ci-token --password "$CI_JOB_TOKEN"
