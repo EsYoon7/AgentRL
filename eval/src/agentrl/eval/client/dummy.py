@@ -44,6 +44,6 @@ class DummyClient(BaseClient):
         return [OpenAIChatCompletionInputMessageRecord([
             ChatCompletionAssistantMessageParam(
                 role='assistant',
-                content=''
+                content='Are you done?'
             )
         ])]
