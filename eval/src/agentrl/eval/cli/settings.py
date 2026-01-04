@@ -71,7 +71,7 @@ class Settings(BaseSettings):
             'openai_base_url'
         )
     )
-    api_proxy: Optional[Url] = Field(
+    proxy_url: Optional[Url] = Field(
         default=None,
         description='URL of the proxy to use to access the model API'
     )

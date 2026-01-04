@@ -40,9 +40,9 @@ FROM deps AS build-venv
 COPY ./eval /app/eval
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check --no-deps /app/eval
+    pip install --disable-pip-version-check --no-deps "/app/eval[tui]"
 
-FROM gcr.io/distroless/python3-debian12
+FROM gcr.io/distroless/python3-debian12:nonroot
 
 COPY --from=build-venv /venv /venv
 
