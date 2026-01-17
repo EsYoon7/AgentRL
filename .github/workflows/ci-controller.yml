@@ -37,11 +37,59 @@ jobs:
   test:
     name: Run Go Tests
     runs-on: ubuntu-latest
+    env:
+      PROTOC_VERSION: '31.1'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version-file: controller/go.mod
+          go-version: '1.24'
+          cache-dependency-path: controller/go.mod
+
+      - name: Install protoc
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64) proto_arch="x86_64" ;;
+            aarch64) proto_arch="aarch_64" ;;
+            *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+          esac
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          curl -L -o /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${os}-${proto_arch}.zip"
+          sudo unzip -o /tmp/protoc.zip -d /usr/local
+          rm /tmp/protoc.zip
+          protoc --version
+
+      - name: Install protoc Go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: Generate protobuf files
+        run: |
+          set -euo pipefail
+          cd controller
+          mkdir -p internal/pb
+          find ../proto -type f -name '*.proto' -print0 | \
+            xargs -0 protoc --proto_path=/usr/local/include --proto_path=../proto \
+            --go_out=internal/pb --go_opt=paths=source_relative \
+            --go-grpc_out=internal/pb --go-grpc_opt=paths=source_relative
+
+      - name: Verify protobuf files are up to date
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- controller/internal/pb; then
+            echo "Protobuf files are not up to date. Please regenerate them (see controller/Dockerfile instructions)." >&2
+            git diff -- controller/internal/pb
+            exit 1
+          fi
+
+      - name: Create dummy dashboard build
+        run: |
+          mkdir -p controller/dashboard/dist
+          touch controller/dashboard/dist/index.html
 
       - name: Run go test
         run: |
