@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import sglang as sgl
 import torch
-from sglang.srt.aio_rwlock import RWLock
+from sglang.srt.utils.aio_rwlock import RWLock
 from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from sglang.srt.utils import MultiprocessingSerializer
