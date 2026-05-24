@@ -62,6 +62,9 @@ class AsyncSglangWorker(AbstractAsyncRolloutWorker):
             except asyncio.CancelledError:
                 print("gen chat cancelled")
 
+        # sglang >=0.5.10 returns list[dict] for a single sequence; unwrap if so.
+        if isinstance(ret, list):
+            ret = ret[0]
         log_probs = ret["meta_info"]["output_token_logprobs"]
 
         text = ret["text"]

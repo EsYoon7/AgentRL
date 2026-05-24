@@ -1,4 +1,5 @@
 import asyncio
+import json
 import traceback
 from typing import Awaitable, Callable, Any
 
@@ -44,12 +45,48 @@ async def openai_chat_agent_loop(
     tokenizer: PreTrainedTokenizerBase,
     tool_call_parser: str,
     incomplete_punishment: float,
+    content_as_parts: bool = False,
     **_
 ) -> dict:
     done = False
     reward = 0
     status = ""
     obs_metrics = {}
+
+    def _wrap_content(text_value: str):
+        # VL processors (e.g. Qwen3VLProcessor) require message["content"] to be a
+        # list of typed parts; text-only tokenizers accept a plain string. The
+        # caller flips `content_as_parts` for VL-backed runs.
+        if content_as_parts:
+            return [{"type": "text", "text": text_value}]
+        return text_value
+
+    def _maybe_load_json(raw: str):
+        if not isinstance(raw, str):
+            return raw
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return raw
+
+    def _flat_ids(result):
+        # VL processors return a BatchFeature/dict; text tokenizers return a
+        # flat list[int]. Normalize to list[int].
+        if isinstance(result, list):
+            if result and isinstance(result[0], list):
+                return result[0]
+            return result
+        if hasattr(result, "input_ids"):
+            ids_obj = result.input_ids
+        elif isinstance(result, dict) and "input_ids" in result:
+            ids_obj = result["input_ids"]
+        else:
+            ids_obj = result
+        if hasattr(ids_obj, "tolist"):
+            ids_obj = ids_obj.tolist()
+        if ids_obj and isinstance(ids_obj[0], list):
+            return ids_obj[0]
+        return ids_obj
 
     # start
     start = await start_fn(**start_args)
@@ -65,6 +102,7 @@ async def openai_chat_agent_loop(
         tokenize=True,
         add_generation_prompt=True,
     )
+    ids = _flat_ids(ids)
     loss_mask = [0] * len(ids)
     log_probs = [0] * len(ids)
 
@@ -90,16 +128,19 @@ async def openai_chat_agent_loop(
             except:
                 normal_text = text
                 info_list = []
-            message["content"] = normal_text
+            message["content"] = _wrap_content(normal_text)
             message["tool_calls"] = [{
                 "id": str(info.tool_index),
                 "function": {
                     "name": info.name,
-                    "arguments": info.parameters,
+                    # FunctionCallParser returns parameters as a JSON string; some
+                    # chat templates (Qwen3.5) iterate arguments as a mapping, so
+                    # decode here and fall back to the raw string on parse error.
+                    "arguments": _maybe_load_json(info.parameters),
                 }
             } for info in info_list]
         else:
-            message["content"] = text
+            message["content"] = _wrap_content(text)
 
         history.append(message)
 
@@ -113,6 +154,7 @@ async def openai_chat_agent_loop(
             tools=tools,
             tokenize=True,
             )
+        last = _flat_ids(last)
         history.extend(messages)
         now = await asyncio.to_thread(
             tokenizer.apply_chat_template,
@@ -121,6 +163,7 @@ async def openai_chat_agent_loop(
             tokenize=True,
             add_generation_prompt=True,
         )
+        now = _flat_ids(now)
         diff = now[len(last):]
         ids += diff
         loss_mask += [0] * len(diff)
@@ -169,6 +212,7 @@ async def retry_openai_chat_agent_loop(
     tool_call_parser: str,
     incomplete_punishment: float = 0,
     max_retries: int = 10,
+    content_as_parts: bool = False,
     **_
 ) -> dict | None:
     for i in range(max_retries):
@@ -184,6 +228,7 @@ async def retry_openai_chat_agent_loop(
                 tokenizer,
                 tool_call_parser,
                 incomplete_punishment,
+                content_as_parts=content_as_parts,
             )
         except RuntimeError:
             return None

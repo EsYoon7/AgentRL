@@ -32,6 +32,10 @@ def apply_fsdp2(model, fsdp_kwargs, config):
 
     if isinstance(fsdp_transformer_layer_cls_to_wrap, str):
         fsdp_transformer_layer_cls_to_wrap = [fsdp_transformer_layer_cls_to_wrap]
+    elif isinstance(fsdp_transformer_layer_cls_to_wrap, (set, frozenset, tuple)):
+        # Some HF configs (e.g. Qwen3.5) expose `_no_split_modules` as a set;
+        # normalize to list so indexing/iteration below works regardless of source.
+        fsdp_transformer_layer_cls_to_wrap = list(fsdp_transformer_layer_cls_to_wrap)
 
     assert (
         len(fsdp_transformer_layer_cls_to_wrap) > 0
@@ -110,10 +114,19 @@ class FSDPWorker(AbstractTrainWorker):
         fsdp_config = self.config.get("fsdp_config", {})
         # load model
         torch_dtype = getattr(torch, self.config["torch_dtype"])
-        self.model = AutoModelForCausalLM.from_pretrained(
+        model_class_name = self.config.get("model_class", "causal_lm")
+        if model_class_name == "causal_lm":
+            auto_cls = AutoModelForCausalLM
+        elif model_class_name == "image_text_to_text":
+            from transformers import AutoModelForImageTextToText
+            auto_cls = AutoModelForImageTextToText
+        else:
+            raise ValueError(f"unknown model_class {model_class_name!r}; expected 'causal_lm' or 'image_text_to_text'")
+        self.model = auto_cls.from_pretrained(
             pretrained_model_name_or_path=path,
             torch_dtype=torch_dtype,
-            attn_implementation="flash_attention_2",
+            # attn_implementation="flash_attention_2",
+            attn_implementation="sdpa",
         )
         self.model.to(torch_dtype)
         if self.config.get("enable_gradient_checkpointing", False):

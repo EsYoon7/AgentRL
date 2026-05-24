@@ -36,13 +36,22 @@ class NCCLTensorSender:
         self.worker_rank = worker.rank
         print(f"sender {torch.cuda.device_count()=} {addr=} {port=} {world_size=} {worker.rank=}")
         if self.worker_rank == 0:
+            sender_device = torch.device("cuda:0")
+            # PyTorch 2.6+ does an eager NCCL handshake against `device_id`; if the
+            # current CUDA context has not been pinned to that device yet the call
+            # raises `Cuda failure 'invalid argument'`. Set device explicitly here.
+            torch.cuda.set_device(sender_device)
+            # NOTE: do not pass `device_id` — PyTorch 2.6+ would otherwise call
+            # `eager_connect_single_device`, which trips a UnicodeDecodeError on
+            # the binary NCCL unique-ID exchanged through this custom TCP store.
+            # Lazy connect on first collective is fine here.
             self.pg = init_custom_process_group(
                 backend="nccl",
                 init_method=f"tcp://{addr}:{port}",
                 world_size=world_size,
                 rank=0,
                 group_name=f"nccl_comm_{addr}_{port}",
-                device_id=torch.device("cuda:0")
+                device_id=None
             )
 
     def send(self, bucket_size):
@@ -50,6 +59,7 @@ class NCCLTensorSender:
         size = 0
         if self.worker_rank == 0:
             dist.barrier(group=self.pg)
+            # dist.barrier(group=self.pg, device_ids=[0])
         for item in self.worker.param_generator():
             key, val = item
             size += val.numel() * val.element_size()
@@ -79,18 +89,24 @@ class NCCLTensorSender:
 class NCCLTensorReceiver:
     def __init__(self, worker: AbstractAsyncRolloutWorker, addr, port, world_size, offset):
         self.worker = worker
-        self.device = torch.device(f"cuda:{(offset + worker.rank) % torch.cuda.device_count()}") # TODO: this is a temperory hack for multiple devices in one process. 
+        self.device = torch.device(f"cuda:{(offset + worker.rank) % torch.cuda.device_count()}") # TODO: this is a temperory hack for multiple devices in one process.
+        # See NCCLTensorSender for the rationale: pin the CUDA context to the
+        # target device before PyTorch's eager NCCL handshake runs, and pass
+        # `device_id=None` to skip eager_connect_single_device entirely (it
+        # raises UnicodeDecodeError on the binary unique-ID round-trip).
+        torch.cuda.set_device(self.device)
         self.pg = init_custom_process_group(
             backend="nccl",
             init_method=f"tcp://{addr}:{port}",
             world_size=world_size,
             rank=offset + worker.rank,
             group_name=f"nccl_comm_{addr}_{port}",
-            device_id=self.device
+            # device_id=None
         )
 
     async def async_receive(self):
         await asyncio.to_thread(dist.barrier, group=self.pg)
+        # await asyncio.to_thread(dist.barrier, group=self.pg, device_ids=[self.device.index])
         done = False
         await self.worker.async_acquire_writer_lock()
         task = asyncio.sleep(0)

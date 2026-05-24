@@ -192,6 +192,7 @@ def openai_chat_task(item, config, tokenizer, gen_fn):
         incomplete_punishment=config.get("incomplete_punishment", 0),
         tool_call_parser=config.get("tool_call_parser", "qwen25"),
         max_retries=config.get("max_retries", 10),
+        content_as_parts=config.get("content_as_parts", False),
     )
     start_fn = partial(openai_chat_start, url=url)
     obs_fn = partial(openai_chat_obs, url=url)
