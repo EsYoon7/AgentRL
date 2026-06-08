@@ -65,6 +65,28 @@ def _extract_text(messages) -> str:
     return "\n".join(chunks)
 
 
+
+def _extract_instruction(messages) -> str:
+    """Pull the task instruction from the controller's first messages.
+
+    OSWorld/AgentBench typically place the instruction in the first user message
+    text. We take the text of the first user-role message; adjust if your
+    controller formats it differently (inspect raw_messages once to confirm).
+    """
+    for m in messages:
+        if m.get("role") == "user":
+            content = m.get("content", [])
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                texts = [p.get("text", "") for p in content
+                         if isinstance(p, dict) and p.get("type") == "text"]
+                if texts:
+                    return "\n".join(texts)
+    # fallback: system message or empty
+    return ""
+
+
 class OSWorldSession:
     """Synchronous-looking wrapper over the async controller API. We run the
     async HTTP calls on the running event loop via asyncio.
@@ -74,37 +96,91 @@ class OSWorldSession:
     multimodal_task await them (see the small change in multimodal_task).
     """
 
-    def __init__(self, url, name, index):
+    def __init__(self, url, name, index, start_timeout_s=600, start_poll_s=10,
+                 save_screenshots_dir=None, traj_id=None):
         self.url = url
         self.name = name
         self.index = index
         self.sid = None
         self._last_info = {}
+        # VM boot can take >80s; wait up to start_timeout_s, polling every
+        # start_poll_s, before giving up on /start_sample.
+        self.start_timeout_s = start_timeout_s
+        self.start_poll_s = start_poll_s
+        # Optional: save each turn's screenshot to disk for debugging (mirrors
+        # inference). save_screenshots_dir=None disables it.
+        self.save_screenshots_dir = save_screenshots_dir
+        self.traj_id = traj_id or str(index)
+        self._save_idx = 0
+        if self.save_screenshots_dir:
+            import os
+            self._shot_dir = os.path.join(
+                self.save_screenshots_dir, str(self.name), str(self.traj_id))
+            os.makedirs(self._shot_dir, exist_ok=True)
+
+    def _save_screenshot(self, screenshot_bytes, tag):
+        """Write a screenshot to disk if saving is enabled. No-op otherwise."""
+        if not self.save_screenshots_dir or screenshot_bytes is None:
+            return
+        import os
+        path = os.path.join(self._shot_dir, f"{self._save_idx:03d}_{tag}.png")
+        try:
+            with open(path, "wb") as f:
+                f.write(screenshot_bytes)
+        except Exception as e:
+            print(f"[OSWorldSession] failed to save screenshot {path}: {e}")
+        self._save_idx += 1
 
     async def reset(self):
-        if isinstance(self.index, object) and hasattr(self.index, "item"):
+        # Normalize index exactly like inference openai_chat_start does.
+        import torch as _torch
+        if isinstance(self.index, _torch.Tensor):
             self.index = self.index.item()
         await asyncio.sleep(random.randint(0, 3))  # avoid peak (mirrors start_fn)
         ret = None
-        for attempt in range(5):
+        # VM boot/reset can take well over a minute (observed ~84s). We must
+        # outlast that: retry for up to start_timeout_s, polling every
+        # start_poll_s. A 400 here usually means "VM not ready yet", so we keep
+        # retrying until the deadline rather than giving up after a few tries.
+        import time as _time
+        start_timeout_s = self.start_timeout_s
+        start_poll_s = self.start_poll_s
+        deadline = _time.time() + start_timeout_s
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 async with aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=600), trust_env=True) as s:
-                    async with s.post(self.url + "/start_sample",
-                                      json={"index": self.index, "name": self.name}) as r:
-                        ret = await r.json()
+                    payload = {"index": self.index, "name": self.name}
+                    async with s.post(self.url + "/start_sample", json=payload) as r:
+                        body = await r.text()
+                        if r.status != 200:
+                            print(f"[OSWorldSession] /start_sample {r.status} "
+                                  f"attempt={attempt} payload={payload!r} "
+                                  f"body={body[:300]}")
                         r.raise_for_status()
+                        import json as _json
+                        ret = _json.loads(body)
                         self.sid = r.headers["session_id"]
                         break
             except Exception:
-                traceback.print_exc()
-                if attempt < 4:
-                    await asyncio.sleep(random.randint(1, 10)); continue
-                raise
+                if _time.time() >= deadline:
+                    print(f"[OSWorldSession] /start_sample giving up after "
+                          f"{attempt} attempts / {start_timeout_s}s")
+                    traceback.print_exc()
+                    raise
+                await asyncio.sleep(start_poll_s)
+                continue
         messages = ret["messages"]
         screenshot = _extract_latest_screenshot(messages)
+        self._save_screenshot(screenshot, "reset")
+        # OSWorld puts the task instruction in the controller's first messages
+        # (not in the dataset item). Extract it so the agent can build prompts.
+        instruction = _extract_instruction(messages)
+        self.instruction = instruction
         return {"screenshot": screenshot, "text": _extract_text(messages),
-                "raw_messages": messages}
+                "instruction": instruction, "raw_messages": messages}
 
     async def step(self, assistant_message: dict):
         """assistant_message: the OpenAI-style assistant message (with tool_calls)
@@ -118,6 +194,7 @@ class OSWorldSession:
                 ret = await r.json()
         messages = ret.get("messages", [])
         screenshot = _extract_latest_screenshot(messages)
+        self._save_screenshot(screenshot, "step")
         done = ret.get("finish", False)
         reward = ret.get("reward", 0.0)
         status = ret.get("status", "")

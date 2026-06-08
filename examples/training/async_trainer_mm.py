@@ -12,6 +12,7 @@ import ray
 import torch
 import wandb
 import yaml
+import math
 from ray.util import placement_group
 from torch.utils.data import DataLoader, ConcatDataset
 from transformers import AutoProcessor
@@ -20,7 +21,7 @@ from agentrl.trainer.agentic.data_provider import get_agentic_datasets
 from agentrl.trainer.algorithms.advantage import compute_advantage
 from agentrl.trainer.algorithms.loss_funcs import log_prob_loss, ppo_loss
 from agentrl.trainer.algorithms.metrics import calc_metrics, calc_batch_rl_metrics, calc_data_metrics, calc_adv_metrics
-from agentrl.trainer.components.nccl_tensor_comm import NCCLTensorSender, NCCLTensorReceiver
+from agentrl.trainer.components.nccl_tensor_comm import NCCLTensorSenderDist
 from agentrl.trainer.components.timer import Timer
 from agentrl.trainer.utils import append_with_prefix, reduce_dict, pretty_print_metrics, repeat, interleave
 from agentrl.trainer.workers.collective_handle import spawn
@@ -28,11 +29,16 @@ from agentrl.trainer.workers.fsdp_worker import FSDPWorker
 from agentrl.trainer.workers.fsdp_worker_mm import FSDPWorkerMM
 
 # === multimodal additions ===
-# Use the id-preserving rollout worker, the per-turn multimodal task, and the
-# manager that handles list (per-turn) task results.
 from agentrl.trainer.workers.async_sglang_worker_mm import AsyncSglangWorkerMM
 from agentrl.trainer.components.multimodal_task import multimodal_chat_task
 from agentrl.trainer.components.task_manager_mm import DistributedTaskManagerMM as DistributedTaskManager
+
+
+WEIGHT_GROUP = "weight_update_group"
+
+
+def _as_list(x):
+    return x if isinstance(x, list) else [x]
 
 
 def collect_val_metrics(val_task_manager, event_loop):
@@ -58,7 +64,6 @@ def gather_metrics(data):
             over_all_metrics[k].append(v)
     overall_metrics = {k: sum(v) / len(v) for k, v in over_all_metrics.items()}
     append_with_prefix(metrics, "overall/", overall_metrics)
-
     return metrics
 
 
@@ -79,23 +84,52 @@ def main(config):
     rollout_placement = placement_group([{"CPU": 1, "GPU": rollout_tp}] * (rollout_gpus // rollout_tp))
     actor_ref_placement = placement_group([{"CPU": 1, "GPU": 1}] * actor_gpus)
 
-    # === multimodal: use the id-preserving rollout worker ===
     rollout = spawn(AsyncSglangWorkerMM, rollout_placement, num_gpus=rollout_tp)(rollout_config)
     actor = spawn(FSDPWorkerMM, actor_ref_placement, num_gpus=0.5)(actor_config)
     ref = spawn(FSDPWorker, actor_ref_placement, num_gpus=0.5)(ref_config)
 
-    # initialize workers
+    # weight-update group의 rendezvous 주소/포트 (메인 train PG와 다른 free 포트)
     streamer_ip, streamer_port = ray.get(actor.dispatch_rank0().get_addr_and_port())
-    streamer_world_size = 1 + len(rollout.workers)
-    streamer_args = (streamer_ip, streamer_port, streamer_world_size)
+    # weight group 멤버 = trainer rank0(src) + SGLang tp 랭크들
+    weight_world_size = 1 + rollout_tp
 
     rollout.build_engine(config["model_path"])
-    rollout.register_plugin("param_receiver", NCCLTensorReceiver, *streamer_args, offset=1)
 
     actor.build_model(config["model_path"])
     actor.build_optimizer()
     actor.build_checkpoint_manager()
-    actor.register_plugin("param_sender", NCCLTensorSender, *streamer_args)
+
+    # === distributed weight-sync 셋업 (NCCL broadcast; IPC 대체) ===
+    # weight group 양끝(SGLang receiver rank_offset=1.., trainer rank0 src)을
+    # 동시에 issue해서 NCCL rendezvous시킨다. 순차 ray.get 하면 deadlock.
+    _sg_init = rollout.init_weight_update_group(
+        streamer_ip, streamer_port,
+        rank_offset=1, world_size=weight_world_size, group_name=WEIGHT_GROUP,
+    )
+    _snd_reg = actor.register_plugin(
+        "param_sender", NCCLTensorSenderDist,
+        streamer_ip, streamer_port, weight_world_size, WEIGHT_GROUP,
+    )
+    ray.get(_as_list(_sg_init))
+    ray.get(_as_list(_snd_reg))
+
+    # param_generator 순서의 정적 메타데이터(names/dtypes/shapes) 1회 수집.
+    # SGLang이 매 sync마다 올바른 텐서를 받기 위해 사용.
+    _metas = ray.get(actor.call_plugin("param_sender", "collect_meta"))
+    param_names, param_dtypes, param_shapes = next(m for m in _metas if m is not None)
+    print(f"[trainer] weight-sync ready: {len(param_names)} params, "
+          f"group ws={weight_world_size}", flush=True)
+
+    def sync_weights():
+        """distributed weight sync: trainer rank0가 전 파라미터를 broadcast,
+        SGLang이 update_weights_from_distributed로 수신. 둘을 동시 issue 후 함께 대기."""
+        recv = rollout.update_params(param_names, param_dtypes, param_shapes)
+        send = actor.call_plugin("param_sender", "send")
+        ray.get(_as_list(recv) + _as_list(send))
+
+    # micro-batch 분배 단위(=actor FSDP mesh size).
+    train_world = ray.get(actor.dispatch_rank0().get_data_parallel_size())
+    print(f"[trainer] actor data-parallel size = {train_world}", flush=True)
 
     ref.build_model(config["model_path"])
 
@@ -124,12 +158,8 @@ def main(config):
     async_thread = threading.Thread(target=run_loop, daemon=True)
     async_thread.start()
 
-    # AutoProcessor (image + text). Passed into the task as `tokenizer`, exactly
-    # as the original trainer did -- our multimodal task treats it as a processor.
     tokenizer = AutoProcessor.from_pretrained(config["model_path"])
 
-    # === multimodal: task_fn is multimodal_chat_task ===
-    # gen_fn now points at generate_with_ids (preserves output token ids).
     train_task_manager = DistributedTaskManager(
         task_fn=lambda item: multimodal_chat_task(
             item,
@@ -142,9 +172,6 @@ def main(config):
         ),
         max_queue_size=real_bsz * 2,
         max_buffer_size=real_bsz * 2,
-        # Per-turn items: a trajectory yields a variable number of turn-items, so
-        # strict buffer grouping by count doesn't map cleanly. Keep buffer
-        # ungrouped (=1) and let compute_advantage group by `group_id`.
         buffer_group_size=1,
         num_workers=concurrency,
         event_loop=event_loop,
@@ -172,11 +199,9 @@ def main(config):
     # make sure workers are ready, use no_op as a barrier
     ray.get(rollout.no_op() + actor.no_op() + ref.no_op())
 
-    # send params to rollout
-    actor.call_plugin("param_sender", "send", float(config.get("bucket_size", 1e9)))
-    rollout.async_call_plugin("param_receiver", "async_receive")
+    # send initial params to rollout (distributed broadcast)
+    sync_weights()
 
-    # === multimodal: validation task manager also uses multimodal_chat_task ===
     val_task_manager = DistributedTaskManager(
         task_fn=lambda item: multimodal_chat_task(
             item,
@@ -195,7 +220,6 @@ def main(config):
     )
     val_task_manager.start()
 
-    # Helper to load validation data
     validating = False
     def load_val_data():
         val_dataloader = repeat(DataLoader(ConcatDataset(val_datasets), batch_size=None, shuffle=True), val_config["n"])
@@ -234,27 +258,33 @@ def main(config):
                 item = next(dataloader)
                 train_task_manager.put_nowait(item)
         with timer.time("gen"):
+            _lcm = math.lcm(n, train_world)
+            _raw = real_bsz * (1.7 if first_step else 1)
+            _need = max(_lcm, int(math.ceil(_raw / _lcm) * _lcm))
+            print(f"[trainer] requesting {_need} items "
+                  f"(real_bsz={real_bsz}, n={n}, train_world={train_world}, "
+                  f"first_step={first_step})...", flush=True)
             data = asyncio.run_coroutine_threadsafe(
-                train_task_manager.get(real_bsz * (1.7 if first_step else 1), n),
+                train_task_manager.get(_need, n),
                 event_loop,
             ).result()
+            print(f"[trainer] got {len(data)} items -> starting training step "
+                  f"{global_step}", flush=True)
             first_step = False
 
-        # === multimodal: fill mrope position_ids (rollout couldn't; no HF model)
-        # Computes positions via the actor model's get_rope_index for image items;
-        # text-only items get an arange. Required before packing (collate asserts).
+        # === multimodal: fill mrope position_ids ===
         with timer.time("positions"):
             from agentrl.trainer.components.position_fill_mm import fill_position_ids
-            # gather image items needing get_rope_index
             img_items = [it for it in data
                          if (it.get("multi_modal_inputs") or {}).get("image_grid_thw") is not None]
             if img_items:
                 ids_list = [it["input_ids"] for it in img_items]
                 grid_list = [it["multi_modal_inputs"]["image_grid_thw"] for it in img_items]
+                print(f"[TRAINER] calling compute_positions, img_items={len(img_items)}", flush=True)
                 positions = ray.get(actor.compute_positions(ids_list, grid_list))[0]
+                print(f"[TRAINER] compute_positions returned", flush=True)
                 for it, pos in zip(img_items, positions):
                     it["position_ids"] = pos
-            # text-only items
             fill_position_ids(data, get_rope_index_fn=None)
 
         # advantage
@@ -266,9 +296,11 @@ def main(config):
         # ref
         with timer.time("ref"):
             loss_config = config.get("loss", {})
+            print(f"[TRAINER] calling ref.forward_backward, data items={len(data)}", flush=True)
             log_probs = ray.get(ref.forward_backward(
                 data, partial(log_prob_loss, config=loss_config), forward_only=True, unpack=True,
             ))[0]
+            print(f"[TRAINER] ref.forward_backward returned", flush=True)
             for item, log_prob in zip(data, log_probs["log_prob"]):
                 item["ref_log_prob"] = log_prob
 
@@ -291,26 +323,20 @@ def main(config):
         data_metrics = gather_metrics(data)
         append_with_prefix(metrics, "rl/", data_metrics)
 
-        # collect val tasks
         if validating:
             val_metrics = collect_val_metrics(val_task_manager, event_loop)
             append_with_prefix(metrics, "val/", val_metrics)
             validating = False
 
-        # sync params
+        # sync params (distributed NCCL broadcast: trainer rank0 -> SGLang)
         with timer.time("sync_params"):
-            r = []
-            r += actor.call_plugin("param_sender", "send", float(config.get("bucket_size", 1e9)))
-            r += rollout.async_call_plugin("param_receiver", "async_receive")
-            ray.get(r)
+            sync_weights()
 
-        # issue val tasks
         if global_step % val_interval == 0:
             load_val_data()
             validating = True
 
         if global_step % save_interval == 0:
-            # save checkpoint
             actor.save_checkpoint(str(save_path / f"global_step_{global_step}"))
             with open(save_path / "latest_checkpointed_iteration.txt", "w") as f:
                 f.write(str(global_step))
@@ -338,14 +364,11 @@ if __name__ == "__main__":
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    # Make the OSWorld inference-agent submodule importable (Qwen35VLAgent).
-    # Set in config: task.agent_repo_dir = "/path/to/the/agent/repo"
     agent_repo_dir = config.get("task", {}).get("agent_repo_dir")
     if agent_repo_dir:
         import sys
         if agent_repo_dir not in sys.path:
             sys.path.insert(0, agent_repo_dir)
-        # propagate to Ray workers (separate processes) via PYTHONPATH
         existing = os.environ.get("PYTHONPATH", "")
         os.environ["PYTHONPATH"] = (
             agent_repo_dir + (":" + existing if existing else ""))

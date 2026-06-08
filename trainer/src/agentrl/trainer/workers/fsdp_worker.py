@@ -89,25 +89,48 @@ class FSDPWorker(AbstractTrainWorker):
         self.config = config
 
     def init_distributed(self, addr, port):
+        import os, ray
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        print(f"[{type(self).__name__} R{os.environ.get('RANK')}/"
+            f"{os.environ.get('WORLD_SIZE')}] addr={addr}:{port} "
+            f"CVD={os.environ.get('CUDA_VISIBLE_DEVICES')} "
+            f"gpu_ids={ray.get_gpu_ids()} count={torch.cuda.device_count()}",
+            flush=True)
+        torch.cuda.set_device(0)  # Ray 마스킹 시 각 워커는 자기 GPU를 0으로 봄
         dist.init_process_group(
             backend="nccl",
             init_method=f"tcp://{addr}:{port}",
             rank=self.rank,
             world_size=self.world_size,
             timeout=timedelta(minutes=60),
+            device_id=torch.device("cuda:0"),   # ← 추가: rank 추측 방지
         )
 
         # build device mesh for FSDP
+        # world_size = dist.get_world_size()
+        # fsdp_size = self.config.get("fsdp_size", -1)
+        # if fsdp_size == -1:
+        #     fsdp_size = world_size
+        # dp_size = world_size // fsdp_size
+        # self.device_mesh = init_device_mesh(
+        #     "cuda",
+        #     mesh_shape=(dp_size, fsdp_size),
+        #     mesh_dim_names=("dp", "fsdp"),
+        # )
         world_size = dist.get_world_size()
         fsdp_size = self.config.get("fsdp_size", -1)
         if fsdp_size == -1:
             fsdp_size = world_size
         dp_size = world_size // fsdp_size
-        self.device_mesh = init_device_mesh(
-            "cuda",
-            mesh_shape=(dp_size, fsdp_size),
-            mesh_dim_names=("dp", "fsdp"),
-        )
+
+        if dp_size == 1:
+            self.device_mesh = init_device_mesh("cuda", mesh_shape=(fsdp_size,), mesh_dim_names=("fsdp",))
+        else:
+            # 2D mesh는 split_group을 부르므로, 부모 NCCL PG를 먼저 eager 초기화한다.
+            torch.cuda.set_device(0)
+            dist.all_reduce(torch.zeros(1, device="cuda"))
+            dist.barrier()
+            self.device_mesh = init_device_mesh("cuda", mesh_shape=(dp_size, fsdp_size), mesh_dim_names=("dp", "fsdp"))
 
     def build_model(self, path):
         from transformers import AutoModelForCausalLM, AutoProcessor
@@ -125,8 +148,8 @@ class FSDPWorker(AbstractTrainWorker):
         self.model = auto_cls.from_pretrained(
             pretrained_model_name_or_path=path,
             torch_dtype=torch_dtype,
-            # attn_implementation="flash_attention_2",
-            attn_implementation="sdpa",
+            attn_implementation="flash_attention_2",
+            # attn_implementation="sdpa",
         )
         self.model.to(torch_dtype)
         if self.config.get("enable_gradient_checkpointing", False):
@@ -153,6 +176,12 @@ class FSDPWorker(AbstractTrainWorker):
         apply_fsdp2(self.model, fsdp_kwargs, fsdp_config)
         assert isinstance(self.model, FSDPModule)
 
+        import shutil, subprocess, os
+        print(f"[r{self.rank}] which nvcc={shutil.which('nvcc')} "
+            f"which ptxas={shutil.which('ptxas')} "
+            f"CUDA_HOME={os.environ.get('CUDA_HOME')} "
+            f"PATH0={os.environ.get('PATH','').split(':')[0]}", flush=True)
+
     def build_optimizer(self):
         optim_config = self.config.get("optim", {})
         assert self.model is not None, "Model must be built before optimizer"
@@ -175,11 +204,57 @@ class FSDPWorker(AbstractTrainWorker):
             processing_class=self.processor,
             checkpoint_contents=self.config.get("checkpoint_contents"),
         )
+    
+    def get_data_parallel_size(self):
+        """pack()의 multiple_of와 동일 — micro-batch를 rank에 균등 분배하는 단위.
+        trainer가 오버샘플 개수를 이 값의 배수로 맞춰 빈 bin(빈 micro-batch)을 방지한다."""
+        return self.device_mesh.size()
 
+    # def param_generator(self):
+    #     for k, v in self.model.named_parameters():
+    #         if isinstance(v, DTensor):
+    #             yield k, v.full_tensor().to(torch.bfloat16)
+    #         else:
+    #             yield k, v
     def param_generator(self):
+        import torch.distributed as dist
+        from torch.distributed.tensor import Replicate, Shard
         for k, v in self.model.named_parameters():
             if isinstance(v, DTensor):
-                yield k, v.full_tensor().to(torch.bfloat16)
+                mesh = v.device_mesh
+                group = mesh.get_group(0)
+                world = dist.get_world_size(group)
+                placement = v.placements[0]
+                local = v.to_local().contiguous()
+
+                if isinstance(placement, Replicate):
+                    full = local
+                else:
+                    shard_dim = placement.dim if isinstance(placement, Shard) else 0
+                    # rank마다 shard 크기가 다를 수 있다(FSDP uneven padding).
+                    # 각 rank의 local 크기를 먼저 교환한 뒤, 최대 크기로 패딩하여
+                    # all_gather(동일 shape 요구)를 만족시키고, 사후에 잘라낸다.
+                    local_size = torch.tensor([local.size(shard_dim)], device=local.device)
+                    sizes = [torch.zeros_like(local_size) for _ in range(world)]
+                    dist.all_gather(sizes, local_size, group=group)
+                    sizes = [int(s.item()) for s in sizes]
+                    max_size = max(sizes)
+
+                    # 최대 크기로 패딩
+                    if local.size(shard_dim) < max_size:
+                        pad_shape = list(local.shape)
+                        pad_shape[shard_dim] = max_size - local.size(shard_dim)
+                        pad = torch.zeros(pad_shape, dtype=local.dtype, device=local.device)
+                        local_padded = torch.cat([local, pad], dim=shard_dim)
+                    else:
+                        local_padded = local
+
+                    gathered = [torch.empty_like(local_padded) for _ in range(world)]
+                    dist.all_gather(gathered, local_padded, group=group)
+                    # 각 rank의 실제 크기만큼만 잘라서 concat
+                    trimmed = [g.narrow(shard_dim, 0, sz) for g, sz in zip(gathered, sizes)]
+                    full = torch.cat(trimmed, dim=shard_dim)
+                yield k, full.to(torch.bfloat16)
             else:
                 yield k, v
 
@@ -215,17 +290,40 @@ class FSDPWorker(AbstractTrainWorker):
         for k, v in model_text_inputs.items():
             if isinstance(v[0], torch.Tensor):
                 if packing:
-                    model_inputs[k] = torch.cat(v, dim=1).cuda()
+                    shapes = [t.shape for t in v]
+                    print(f"[COLLATE] text key={k} shapes={shapes}", flush=True)
+                    model_inputs[k] = torch.cat(v, dim=-1).cuda()   # was dim=1
                 else:
                     raise NotImplementedError
             else:
                 model_inputs[k] = v
+
+        # 멀티모달 루프 (그 아래)
         for k, v in model_multi_modal_inputs.items():
             if isinstance(v[0], torch.Tensor):
-                model_inputs[k] = torch.stack(v, dim=1).cuda()
+                shapes = [t.shape for t in v]
+                print(f"[COLLATE] mm key={k} shapes={shapes}", flush=True)
+                model_inputs[k] = torch.cat(v, dim=0).cuda()        # was torch.stack(v, dim=1)
             else:
                 model_inputs[k] = v
         model_inputs["indices"] = indices
+        seq_lens_list = model_text_inputs["seq_len"]   # [len0, len1, ...]
+
+        # cu_seqlens: [0, len0, len0+len1, ..., total], int32 (FA 요구)
+        cu_seqlens = torch.zeros(len(seq_lens_list) + 1, dtype=torch.int32)
+        cu_seqlens[1:] = torch.tensor(seq_lens_list, dtype=torch.int32).cumsum(0)
+        cu_seqlens = cu_seqlens.cuda()
+        max_len = int(max(seq_lens_list))
+
+        model_inputs["cu_seq_lens_q"] = cu_seqlens
+        model_inputs["cu_seq_lens_k"] = cu_seqlens
+        model_inputs["max_length_q"] = max_len
+        model_inputs["max_length_k"] = max_len
+
+        # 검증: cu_seqlens 마지막 = 총 토큰 수 (packing 정합)
+        assert int(cu_seqlens[-1]) == model_inputs["input_ids"].shape[-1], \
+            f"[COLLATE] cu_seqlens[-1]={int(cu_seqlens[-1])} != input_ids seq={model_inputs['input_ids'].shape[-1]}"
+        print(f"[COLLATE] cu_seqlens={cu_seqlens.tolist()} max_len={max_len}", flush=True)
 
         return model_inputs
 
@@ -260,6 +358,9 @@ class FSDPWorker(AbstractTrainWorker):
         assert forward_only or self.optimizer is not None, "Optimizer must be built before forward_backward"
         assert isinstance(mini_batch, list)
 
+        # added by esyoon 2026-06-01-20:14:03
+        print(f"[FB r{self.rank}] ENTER forward_backward", flush=True)
+
         if forward_only:
             self.model.eval()
             cm = torch.no_grad()
@@ -284,8 +385,18 @@ class FSDPWorker(AbstractTrainWorker):
         metrics = []
         total_batches = len(dataloader)
         for batch_idx, inputs in dataloader:
+            # added by esyoon 2026-06-01-17:11:52
+            has_image = any(k in inputs for k in ("pixel_values", "image_grid_thw"))
+            print(f"[FB r{self.rank}] batch {batch_idx} has_image={has_image} "
+                f"keys={[k for k in inputs if 'pix' in k or 'image' in k or 'grid' in k]}", flush=True)
+            
             self.model.set_is_last_backward(batch_idx == total_batches)
             model_inputs = {k: v for k, v in inputs.items() if k in self.config["model_input_keys"]}
+
+            for _k in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k"):
+                if _k in inputs:
+                    model_inputs[_k] = inputs[_k]
+            
             batch_weight = sum(inputs["loss_weight"])
 
             with cm:
@@ -349,3 +460,23 @@ class FSDPWorker(AbstractTrainWorker):
     def load_checkpoint(self, path: str):
         assert self.checkpoint_manager is not None, "Checkpoint manager must be built before loading checkpoint"
         self.checkpoint_manager.load_checkpoint(path)
+    
+    def verify_param_generator(self):
+        gen = {k: v for k, v in self.param_generator()}   # 새 방식 (수동 all_gather)
+        # 1) 개수 확인: named_parameters와 일치하나
+        n_params = sum(1 for _ in self.model.named_parameters())
+        # 2) 각 param의 full shape이 named_parameters의 논리적 shape과 맞나
+        bad = []
+        for k, v in self.model.named_parameters():
+            got = gen[k]
+            # DTensor의 논리적(글로벌) shape
+            expected_shape = tuple(v.shape)   # DTensor.shape는 글로벌 shape 반환
+            if tuple(got.shape) != expected_shape:
+                bad.append((k, "shape", tuple(got.shape), expected_shape))
+            if got.dtype != torch.bfloat16 and isinstance(v, DTensor):
+                bad.append((k, "dtype", str(got.dtype)))
+        if self.rank == 0:
+            print(f"[PGCHK] gen={len(gen)} named={n_params} bad={len(bad)}", flush=True)
+            for b in bad[:20]:
+                print(f"[PGCHK] {b}", flush=True)
+        return len(bad)

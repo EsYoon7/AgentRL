@@ -122,12 +122,25 @@ def clip_by_value(x, tensor_min, tensor_max):
     return clipped
 
 
-def entropy_from_logits(logits: torch.Tensor):
-    """Calculate entropy from logits."""
-    pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
-    return entropy
-
+# def entropy_from_logits(logits: torch.Tensor):
+#     """Calculate entropy from logits."""
+#     pd = torch.nn.functional.softmax(logits, dim=-1)
+#     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+#     return entropy
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 1024):
+    """Calculate entropy from logits, chunked over the token dim to bound peak memory."""
+    # logits: [..., seq, vocab] — flatten leading dims, loop over rows in chunks
+    orig_shape = logits.shape[:-1]
+    vocab = logits.shape[-1]
+    flat = logits.reshape(-1, vocab)
+    out = torch.empty(flat.shape[0], device=logits.device, dtype=torch.float32)
+    for i in range(0, flat.shape[0], chunk_size):
+        chunk = flat[i : i + chunk_size]
+        # logsumexp - sum(softmax * logits), computed per chunk
+        lse = torch.logsumexp(chunk, dim=-1)
+        pd = torch.softmax(chunk, dim=-1)
+        out[i : i + chunk_size] = lse - torch.sum(pd * chunk, dim=-1)
+    return out.reshape(orig_shape)
 
 def masked_sum(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""

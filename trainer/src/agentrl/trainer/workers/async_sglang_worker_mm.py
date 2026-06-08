@@ -21,12 +21,15 @@ from agentrl.trainer.utils import to_device
 
 
 def extract_generation(ret: dict):
-    """(text, output_ids, rollout_logprobs) from a native sglang result.
+    """(text, output_ids, rollout_logprobs, prompt_ids) from a native sglang result.
 
-    Confirmed for this repo's sglang version via probe:
-      meta_info['output_token_logprobs'] is a list of (logprob, token_id, ...)
-    We extract ids from index [1] and logprobs from index [0]. If a future
-    version also exposes top-level 'output_ids', prefer it.
+    Method B: SGLang tokenizes the prompt (text + image_data) itself, so we read
+    BOTH prompt ids and output ids back:
+      meta_info['input_token_logprobs']  -> prompt ids   (logprob, token_id, ...)
+      meta_info['output_token_logprobs'] -> output ids   (logprob, token_id, ...)
+    Requires async_generate(..., return_logprob=True, logprob_start_len=0) so the
+    full prompt's input_token_logprobs are returned. prompt_ids is None if the
+    field is absent (then method B isn't available on this sglang version).
     """
     if isinstance(ret, list):
         ret = ret[0]
@@ -51,7 +54,17 @@ def extract_generation(ret: dict):
             "ret['meta_info'].keys() for this sglang version."
         )
 
-    return text, output_ids, rollout_logprobs
+    # prompt ids (method B): the prompt SGLang actually tokenized, incl. expanded
+    # image placeholders. Use these as the training prompt ids (tokenize-once).
+    itlp = meta.get("input_token_logprobs")
+    prompt_ids = None
+    if itlp is not None:
+        try:
+            prompt_ids = [int(x[1]) for x in itlp]
+        except Exception:
+            prompt_ids = None
+
+    return text, output_ids, rollout_logprobs, prompt_ids
 
 
 class AsyncSglangWorkerMM(AsyncSglangWorker):

@@ -27,6 +27,28 @@ from agentrl.trainer.components.rl_agent_adapter import (
 )
 
 
+def _load_instruction(item, task_config):
+    """Load instruction from the task config JSON, exactly like inference does:
+       {test_config_base_dir}/examples/{domain}/{example_id}.json -> ["instruction"]
+    item provides index (==example_id) and name (==domain, unless overridden by
+    `domain_field`). Falls back to item["instruction"] or env-provided one.
+    """
+    import json, os
+    base = task_config.get("test_config_base_dir")
+    if base is None:
+        return item.get("instruction", "")
+    domain = item.get("domain") or item.get("name")
+    example_id = item.get("index")
+    path = os.path.join(base, "examples", str(domain), f"{example_id}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            example = json.load(f)
+        return example["instruction"]
+    except Exception as e:
+        print(f"[multimodal_task] could not load instruction from {path}: {e}")
+        return item.get("instruction", "")
+
+
 def build_env_from_item(item, task_config):
     """Open an OSWorld session via the controller API (async)."""
     from agentrl.trainer.components.osworld_env_adapter import OSWorldSession
@@ -34,6 +56,10 @@ def build_env_from_item(item, task_config):
         url=task_config["base_url"],
         name=item.get("name", task_config.get("train_tasks", ["osworld"])[0]),
         index=item.get("index", 0),
+        start_timeout_s=task_config.get("start_timeout_s", 600),
+        start_poll_s=task_config.get("start_poll_s", 10),
+        save_screenshots_dir=task_config.get("save_screenshots_dir"),
+        traj_id=str(item.get("index", 0)),
     )
 
 
@@ -63,62 +89,113 @@ def _make_agent(task_config):
     return agent
 
 
-def _encode(processor, messages, live_images, enable_thinking):
-    """Tokenize messages ONCE. enable_thinking matches inference's chat template
-    kwarg so the tokenization is identical."""
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True,
-        enable_thinking=enable_thinking,
-    )
-    kwargs = dict(text=[text], return_tensors="pt")
+def _encode_text_and_images(processor, messages, live_images, enable_thinking):
+    """Build the TEXT string for SGLang (SGLang tokenizes + expands image
+    placeholders, avoiding the double-process IndexError), AND build the
+    training-side tensors from the SAME processor call: input_ids (our prompt
+    ids) + pixel_values + image_grid_thw.
+
+    We use the processor's input_ids as prompt_ids instead of asking SGLang for
+    them (which requires logprob_start_len=0 -> computes full-prompt logits ->
+    OOM on long OSWorld prompts). SGLang and this processor share the same
+    transformers processor, so the tokenizations match; the Layer-6 logprob
+    check is the safety net for any drift."""
+    # Qwen3.5 chat template reads `enable_thinking` directly: when False it emits
+    # an empty `<think>\n\n</think>` block (thinking off). apply_chat_template
+    # forwards **kwargs into the template, so pass enable_thinking as a direct
+    # keyword. Wrapping it in chat_template_kwargs={...} does NOT work here (that
+    # dict is only unwrapped by servers like vLLM, not by a direct
+    # apply_chat_template call) -- it gets silently ignored and thinking stays on.
+    try:
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+        )
+    except TypeError:
+        # very old transformers that only accept chat_template_kwargs
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+            chat_template_kwargs={"enable_thinking": enable_thinking},
+        )
+    mm = {}
+    enc_kwargs = dict(text=[text], return_tensors="pt")
     if live_images:
-        kwargs["images"] = live_images
-    enc = processor(**kwargs)
-    return enc
+        enc_kwargs["images"] = live_images
+    enc = processor(**enc_kwargs)
+    prompt_ids = enc["input_ids"][0].tolist()
+    if live_images and "pixel_values" in enc:
+        mm["pixel_values"] = enc["pixel_values"]
+        mm["image_grid_thw"] = enc["image_grid_thw"]
+    return text, prompt_ids, mm
 
 
 async def _rollout_trajectory(item, processor, task_config, gen_fn):
-    instruction = item["instruction"]
     enable_thinking = task_config.get("enable_thinking", False)
 
     agent = _make_agent(task_config)
     env = build_env_from_item(item, task_config)
 
+    # Instruction source = SAME as inference: load the task JSON directly and
+    # read example["instruction"]. dataset item has {index, name}; inference uses
+    # {test_config_base_dir}/examples/{domain}/{example_id}.json with
+    # example_id == index. We mirror that exactly so RL == inference.
+    instruction = _load_instruction(item, task_config)
+
+    # Optional debug trajectory dump (a): human-readable per-turn log of what the
+    # model saw (messages w/ screenshots stripped), what it generated, the parsed
+    # action, and the reward. Enabled via task.save_trajectory_dir.
+    traj_log = []
+    save_traj_dir = task_config.get("save_trajectory_dir")
+
+    import time as _time
+    t_traj_start = _time.time()
     records = []
+    t_reset_start = _time.time()
     obs = await env.reset()
+    t_reset = _time.time() - t_reset_start
+    print(f"[timing] reset took {t_reset:.1f}s (name={item.get('name')} "
+          f"index={item.get('index')})", flush=True)
     done, info, turn = False, {}, 0
     max_turns = task_config.get("max_turns", 30)
+    t_gen_total = 0.0
+    t_step_total = 0.0
 
     while not done and turn < max_turns:
         # 1) build messages via the adapter (screenshot append + folding +
         #    message construction, identical to inference predict()'s first half)
         messages, live_images, _pw, _ph = agent.build_messages_only(instruction, obs)
 
-        # 2) tokenize ONCE (processor); enable_thinking matches inference
-        enc = _encode(processor, messages, live_images, enable_thinking)
-        prompt_ids = enc["input_ids"][0].tolist()
+        # 2) build TEXT (for SGLang) + our prompt_ids + training image tensors
+        text, prompt_ids, mm = _encode_text_and_images(
+            processor, messages, live_images, enable_thinking)
 
-        # 3) generate via sglang, preserving output ids
+        # 3) generate via sglang: send TEXT + image_data (NOT input_ids), so
+        #    SGLang tokenizes + expands placeholders without the double-process
+        #    IndexError. We do NOT request full prompt logprobs (that OOMs), so
+        #    we use our processor's prompt_ids above; sglang's returned prompt
+        #    ids (if any) are only for optional drift checks.
         import base64, io
         image_data = []
         for im in live_images:
             buf = io.BytesIO(); im.save(buf, format="PNG")
             image_data.append(base64.b64encode(buf.getvalue()).decode())
-        _text, output_ids, rollout_lp = await gen_fn(
-            input_ids=prompt_ids,
+        _t_gen = _time.time()
+        _text, output_ids, rollout_lp, _sglang_prompt_ids = await gen_fn(
+            prompt=text,
             image_data=image_data if image_data else None,
         )
+        t_gen_total += _time.time() - _t_gen
 
         # 4) decode response text and feed it back so agent history evolves
         response_text = processor.tokenizer.decode(output_ids, skip_special_tokens=False)
-        agent.record_response(response_text, obs)
+        low_level, pyautogui_code = agent.record_response(response_text, obs)
 
         records.append({
-            "prompt_ids": prompt_ids,
+            "prompt_ids": prompt_ids,           # SGLang-tokenized prompt
             "output_ids": output_ids,
             "rollout_lp": rollout_lp,
-            "pixel_values": enc.get("pixel_values"),
-            "image_grid_thw": enc.get("image_grid_thw"),
+            "pixel_values": mm.get("pixel_values"),
+            "image_grid_thw": mm.get("image_grid_thw"),
             "turn_index": turn,
         })
 
@@ -127,13 +204,112 @@ async def _rollout_trajectory(item, processor, task_config, gen_fn):
         assistant_message = _build_assistant_message(
             response_text, task_config, content_as_parts=task_config.get("content_as_parts", True))
 
+        _t_step = _time.time()
         obs, reward, done, info = await env.step(assistant_message)
+        t_step_total += _time.time() - _t_step
         records[-1]["reward"] = float(reward)
+
+        if save_traj_dir is not None:
+            traj_log.append({
+                "turn": turn,
+                "messages": _strip_images_for_log(messages),
+                "num_live_images": len(live_images),
+                "prompt_len": len(prompt_ids),
+                "response_text": response_text,
+                "low_level_instruction": low_level,
+                "pyautogui_code": pyautogui_code,
+                "reward": float(reward),
+                "done": bool(done),
+                "status": info.get("status"),
+                "gen_s": round(t_gen_total, 2),
+                "env_step_s": round(t_step_total, 2),
+            })
         turn += 1
 
     await env.end(done)
     success = env.is_success(info) if turn > 0 else False
+
+    t_traj_total = _time.time() - t_traj_start
+    print(f"[timing] trajectory done: total={t_traj_total:.1f}s "
+          f"reset={t_reset:.1f}s gen={t_gen_total:.1f}s "
+          f"env_step={t_step_total:.1f}s turns={turn} "
+          f"success={success} (name={item.get('name')} index={item.get('index')})",
+          flush=True)
+
+    if save_traj_dir is not None:
+        _write_trajectory_dump(
+            save_traj_dir, item, instruction, traj_log, success, info)
+
     return records, success
+
+
+def _strip_images_for_log(messages):
+    """Replace base64 image payloads with a short marker so the dump stays
+    readable and small. Handles both part formats this agent may emit:
+      {"type": "image_url", "image_url": {"url": "data:image/..."}}
+      {"type": "image",     "url": "data:image/..."}
+    and, defensively, any string value that looks like a base64 image."""
+    def _shorten(url):
+        if isinstance(url, str) and url:
+            return url[:32] + "...<omitted>"
+        return url
+
+    def _clean_part(p):
+        if not isinstance(p, dict):
+            return p
+        t = p.get("type")
+        if t == "image_url":
+            url = (p.get("image_url") or {}).get("url", "")
+            return {"type": "image_url", "image_url": {"url": _shorten(url)}}
+        if t == "image":
+            # url may be under "url" or "image"
+            if "url" in p:
+                return {"type": "image", "url": _shorten(p.get("url"))}
+            if "image" in p:
+                return {"type": "image", "image": _shorten(p.get("image"))}
+            return {"type": "image", "_omitted": True}
+        # any other part: scrub long data:image strings in its values
+        cleaned = {}
+        for k, v in p.items():
+            if isinstance(v, str) and v.startswith("data:image"):
+                cleaned[k] = _shorten(v)
+            else:
+                cleaned[k] = v
+        return cleaned
+
+    out = []
+    for m in messages:
+        content = m.get("content", [])
+        if isinstance(content, str):
+            out.append({"role": m.get("role"), "content": content})
+            continue
+        parts = [_clean_part(p) for p in content]
+        out.append({"role": m.get("role"), "content": parts})
+    return out
+
+
+def _write_trajectory_dump(save_dir, item, instruction, traj_log, success, info):
+    import json, os
+    name = str(item.get("name", "task"))
+    traj_id = str(item.get("index", 0))
+    out_dir = os.path.join(save_dir, name, traj_id)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "trajectory.jsonl")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            # header line: task-level metadata
+            f.write(json.dumps({
+                "event": "meta", "name": name, "index": traj_id,
+                "instruction": instruction, "success": bool(success),
+                "num_turns": len(traj_log),
+                "final_status": info.get("status"),
+                "final_reward": info.get("reward"),
+            }, ensure_ascii=False) + "\n")
+            for entry in traj_log:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        print(f"[trajectory] saved {path} ({len(traj_log)} turns, success={success})")
+    except Exception as e:
+        print(f"[trajectory] failed to save {path}: {e}")
 
 
 def _build_assistant_message(text, task_config, content_as_parts=True):
